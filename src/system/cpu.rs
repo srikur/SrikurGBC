@@ -1,7 +1,8 @@
+pub mod audio;
 pub mod gpu;
-pub mod interrupt;
-pub mod memory;
 pub mod keys;
+pub mod memory;
+pub mod timer;
 
 pub struct CPU {
     pub regs: Registers,
@@ -15,7 +16,9 @@ pub struct CPU {
 pub struct MemoryBus {
     pub memory: memory::MMU,
     pub gpu: gpu::GPU,
-    pub keys: keys::Keys
+    pub keys: keys::Keys,
+    pub timer: timer::Timer,
+    pub apu: audio::APU,
 }
 
 #[derive(Copy, Clone)]
@@ -26,6 +29,7 @@ pub struct FlagsRegister {
     pub carry: bool,
 }
 
+#[derive(PartialEq)]
 enum LoadByteTarget {
     A,
     B,
@@ -41,6 +45,8 @@ enum LoadByteTarget {
     DE,
     A16,
 }
+
+#[derive(PartialEq)]
 enum LoadByteSource {
     A,
     B,
@@ -73,12 +79,14 @@ enum LoadWordTarget {
     A16,
 }
 
+#[derive(PartialEq)]
 enum LoadOtherTarget {
     A,
     A8,
     CAddress,
 }
 
+#[derive(PartialEq)]
 enum LoadOtherSource {
     A,
     A8,
@@ -131,8 +139,21 @@ enum Instructions {
     RETI(),
     RLCA(),
     RRCA(),
+    RRC(ArithmeticSource),
     RLA(),
     RRA(),
+
+    /* CB Instructions */
+    RLC(ArithmeticSource),
+    RL(ArithmeticSource),
+    RR(ArithmeticSource),
+    SLA(ArithmeticSource),
+    SRA(ArithmeticSource),
+    SWAP(ArithmeticSource),
+    SRL(ArithmeticSource),
+    BIT(u8, ArithmeticSource),
+    RES(u8, ArithmeticSource),
+    SET(u8, ArithmeticSource),
 }
 
 enum RSTTargets {
@@ -173,6 +194,7 @@ enum ArithmeticTarget {
     SP,
 }
 
+#[derive(Eq, PartialEq)]
 enum ArithmeticSource {
     A,
     B,
@@ -186,12 +208,21 @@ enum ArithmeticSource {
     I8,
 }
 
+#[derive(PartialEq)]
 enum JumpTest {
     NotZero,
     Zero,
     NotCarry,
     Carry,
     Always,
+}
+
+pub enum Interrupts {
+    VBlank,
+    LCDStat,
+    Timer,
+    //Serial, still need to implement transfer cable functionality
+    Joypad,
 }
 
 pub struct Registers {
@@ -206,31 +237,21 @@ pub struct Registers {
 }
 
 impl MemoryBus {
-
     fn read_byte(&self, address: u16) -> u8 {
         let mut address = address as usize;
-        
-        match address {
 
+        match address {
             /* ROM Bank 0 */
-            0x0000..=0x3FFF => {
-                self.memory.rom[address as usize]
-            }
+            0x0000..=0x3FFF => self.memory.game_rom[address as usize],
 
             /* Additional ROM Banks */
             0x4000..=0x7FFF => {
-                self.memory.rom[address as usize]
+                self.memory.game_rom[address as usize - memory::SWITCHABLE_BANK_BEGIN
+                    + (self.memory.current_rom_bank as usize * 0x4000)]
             }
 
             /* Read from VRAM */
-            gpu::VRAM_BEGIN..=gpu::VRAM_END => {
-                self.gpu.read_vram(address - gpu::VRAM_BEGIN)
-            }
-
-            /* Read from External Cartridge RAM */
-            memory::ERAM_BEGIN..=memory::ERAM_END => {
-                self.memory.eram[address - memory::ERAM_BEGIN]
-            }
+            gpu::VRAM_BEGIN..=gpu::VRAM_END => self.gpu.read_vram(address - gpu::VRAM_BEGIN),
 
             /* Read from Work RAM */
             memory::WRAM_BEGIN..=memory::WRAM_END => {
@@ -243,76 +264,108 @@ impl MemoryBus {
             }
 
             /* Read from Sprite Attribute Table */
-            gpu::OAM_BEGIN..=gpu::OAM_END => {
-                self.gpu.oam[address - gpu::OAM_BEGIN]
+            gpu::OAM_BEGIN..=gpu::OAM_END => self.gpu.oam[address - gpu::OAM_BEGIN],
+
+            /* GPU Registers */
+            gpu::GPU_REGS_BEGIN..=gpu::GPU_REGS_END => self.gpu.read_registers(address),
+
+            /* Read from RAM Bank */
+            memory::ERAM_BEGIN..=memory::ERAM_END => {
+                address = address - memory::ERAM_BEGIN;
+                self.memory.ram_banks[address + (self.memory.current_ram_bank as usize * 0x2000)]
             }
 
             /* Read from High RAM */
-            memory::ZRAM_BEGIN..=memory::ZRAM_END => {
-                self.memory.zram[address - memory::ZRAM_BEGIN]
-            }
+            memory::ZRAM_BEGIN..=memory::ZRAM_END => self.memory.zram[address - memory::ZRAM_BEGIN],
 
             /* Not usable memory */
-            0xFEA0..=0xFEFF => {
-                panic!("Not usable memory. Something went wrong!")
-            }
+            0xFEA0..=0xFEFF => panic!("Not usable memory. Something went wrong!"),
 
             /* Joypad Input */
-            0xFF00 => self.keys.read_key(),
+            keys::JOYPAD_INPUT => self.keys.get_joypad_state(),
 
-            _ => panic!("Unable to process 'address' in read_byte()")
+            /* Interrupt Enable 0xFFFF */
+            memory::INTERRUPT_ENABLE => self.memory.interrupt_enable,
+
+            /* Interrupt Flag 0xFF0F */
+            memory::INTERRUPT_FLAG => self.memory.interrupt_flag,
+
+            /* DIV - Divider Register */
+            timer::DIVIDER_REGISTER => self.timer.divider_register as u8,
+
+            /* TIMA - Timer Counter */
+            timer::TIMA => self.timer.timer_counter_tima as u8,
+
+            /* TAC - Timer Control */
+            timer::TMC => panic!("Return TAC"),
+
+            /* Audio Controls */
+            audio::SOUND_BEGIN..=audio::SOUND_END => self.apu.read_byte(address),
+
+            _ => panic!("Unable to process 'address' in read_byte()"),
         }
     }
 
-    fn read_byte_2(&self, address: u16) -> u8 {
-        let address = address as usize;
-        match address & 0xF000 {
-            0x0000 => self.memory.rom[address as usize],
-            0x1000 => self.memory.rom[address as usize],
-            0x2000 => self.memory.rom[address as usize],
-            0x3000 => self.memory.rom[address as usize],
-            0x4000 => self.memory.rom[address as usize],
-            0x5000 => self.memory.rom[address as usize],
-            0x6000 => self.memory.rom[address as usize],
-            0x7000 => self.memory.rom[address as usize],
-            0x8000 | 0x9000 => self.gpu.read_vram((address & 0x1FFF) - gpu::VRAM_BEGIN),
-            0xA000 | 0xB000 => self.memory.eram[address & 0x1FFF],
-            0xC000 | 0xD000 | 0xE000 => self.memory.wram[address & 0x1FFF],
-            0xF000 => match address & 0xF00 {
-                0x000 | 0x100 | 0x200 | 0x300 | 0x400 | 0x500 | 0x600 | 0x700 | 0x800 | 0x900
-                | 0xA00 | 0xB00 | 0xC00 | 0xD00 => self.memory.wram[address & 0x1FFF],
-                0xE00 => {
-                    if address < 0xFEA0 {
-                        self.gpu.oam[address & 0xFF]
-                    } else {
-                        0
+    fn handle_banking(&mut self, address: usize, value: u8) {
+        let mut value = value;
+
+        match address {
+            0x0000..=0x1FFF => {
+                if self.memory.mbc1 || self.memory.mbc2 {
+                    if self.memory.mbc2 && ((address & 0x10) == 1) {
+                        return;
+                    }
+
+                    match value & 0xF {
+                        0xA => self.memory.ram_enabled = true,
+                        0x0 => self.memory.ram_enabled = false,
+                        _ => self.memory.ram_enabled = false,
                     }
                 }
-                0xF00 => {
-                    if address == 0xFFFF {
-                        self.memory.interrupt_enable
-                    } else if address >= 0xFF80 {
-                        self.memory.zram[(address & 0x7F) - memory::ZRAM_BEGIN]
-                    } else {
-                        match address & 0xF0 {
-                            0x00 => {
-                                if address == 0xFF0F {
-                                    self.memory.interrupt_flag
-                                } else {
-                                    0
-                                }
-                            }
-                            0x40 => self.gpu.read_vram(address - gpu::VRAM_BEGIN),
-                            0x50 => self.gpu.read_vram(address - gpu::VRAM_BEGIN),
-                            0x60 => self.gpu.read_vram(address - gpu::VRAM_BEGIN),
-                            0x70 => self.gpu.read_vram(address - gpu::VRAM_BEGIN),
-                            _ => panic!("Unable to process 'address in read_byte()'"),
+            }
+
+            0x2000..=0x3FFF => {
+                if self.memory.mbc1 || self.memory.mbc2 {
+                    if self.memory.mbc2 {
+                        if value & 0xF == 0 {
+                            self.memory.current_rom_bank += 1;
                         }
+                        return;
+                    }
+
+                    self.memory.current_rom_bank &= 0xE0;
+                    self.memory.current_rom_bank |= value & 0x1F;
+                    if self.memory.current_rom_bank == 0 {
+                        self.memory.current_rom_bank += 1;
                     }
                 }
-                _ => panic!("Unable to process 'address' in read_byte()"),
-            },
-            _ => panic!("Unable to process 'address' in read_byte()"),
+            }
+
+            0x4000..=0x5FFF => {
+                if self.memory.mbc1 {
+                    if !self.memory.cartridge_type != 0 {
+                        self.memory.current_rom_bank &= 0x1F;
+                        value &= 0xE0;
+                        self.memory.current_rom_bank |= value;
+
+                        if self.memory.current_rom_bank == 0 {
+                            self.memory.current_rom_bank += 1;
+                        }
+                    } else {
+                        self.memory.current_ram_bank = value & 0x03;
+                    }
+                }
+            }
+
+            0x6000..=0x7FFF => {
+                if self.memory.mbc1 {
+                    if (value & 0x01) == 0 {
+                        self.memory.current_ram_bank = 0;
+                    }
+                }
+            }
+
+            _ => panic!("Error"),
         }
     }
 
@@ -323,8 +376,24 @@ impl MemoryBus {
     }
 
     pub fn write_byte(&mut self, address: u16, value: u8) {
+
+        println!("Write byte called with value {:X}", value);
+
         let address = address as usize;
         match address {
+            /* Handle Banking */
+            0x0000..=0x7FFF => {
+                self.handle_banking(address, value);
+            }
+
+            memory::ERAM_BEGIN..=memory::ERAM_END => {
+                if self.memory.ram_enabled {
+                    let new_address = address - 0xA000;
+                    self.memory.ram_banks
+                        [new_address + (self.memory.current_ram_bank as usize * 0x2000)] = value;
+                }
+            }
+
             /* Write to VRAM */
             gpu::VRAM_BEGIN..=gpu::VRAM_END => {
                 self.gpu.write_vram(address - gpu::VRAM_BEGIN, value);
@@ -332,10 +401,6 @@ impl MemoryBus {
             /* Write to WRAM or Echo RAM*/
             memory::WRAM_BEGIN..=memory::WRAM_END => {
                 self.memory.wram[address - memory::WRAM_BEGIN] = value;
-            }
-            /* Write to External RAM */
-            memory::ERAM_BEGIN..=memory::ERAM_END => {
-                self.memory.eram[address - memory::ERAM_BEGIN] = value;
             }
 
             /* Write to High RAM */
@@ -349,32 +414,71 @@ impl MemoryBus {
             }
 
             /* Not usable memory */
-            0xFEA0..=0xFEFF => {
-                panic!("Trying to write to invalid memory. Something went wrong!")
-            }
+            0xFEA0..=0xFEFF => return, // Invalid memory location
+
+            /* Not usable as well */
+            0xFF4C..=0xFF7F => return,
 
             /* Write to Joypad Register */
-            0xFF00 => {
-                self.keys.write_key(value);
-            }
+            0xFF00 => self.keys.joypad_state = value,
 
             /* Write to I/0 Registers */
-            0xFF0F => {
+            memory::INTERRUPT_FLAG => {
                 self.memory.interrupt_flag = value;
             }
 
             /* Write to Interrupts Enable Register */
-            0xFFFF => {
+            memory::INTERRUPT_ENABLE => {
                 self.memory.interrupt_enable = value;
             }
 
             /* Write to GPU registers */
             gpu::GPU_REGS_BEGIN..=gpu::GPU_REGS_END => {
+                if address == 0xFF46 {
+                    /* DMA Transfer */
+                    let value = (value as u16) << 8;
+                    for i in 0..=0x9F {
+                        self.gpu.oam[i] = self.read_byte(value + i as u16);
+                    }
+                    return;
+                }
+
                 self.gpu.write_registers(address, value);
             }
 
+            timer::DIVIDER_REGISTER => {
+                self.timer.divider_register = 0;
+            }
+
+            timer::TIMA => {
+                self.timer.timer_counter_tima = value as u32;
+            }
+
+            timer::TMA => {
+                self.timer.timer_modulo_tma = value as u32;
+            }
+
+            timer::TMC => {
+                /* Timer Control */
+                self.timer.clock_enabled = (value & 0x04) != 0;
+                let new_speed: u16 = match value & 0x03 {
+                    0 => 1024,
+                    1 => 16,
+                    2 => 64,
+                    3 => 256,
+                    _ => 1024,
+                };
+
+                if new_speed != self.timer.input_clock_speed {
+                    self.timer.input_clock_speed = new_speed;
+                }
+            }
+
+            /* Audio Controls */
+            audio::SOUND_BEGIN..=audio::SOUND_END => self.apu.write_byte(address, value),
+
             _ => println!(
-                "Write byte called for address: 0x{:X}. Value: {:X}",
+                "Write byte not implemented for address: 0x{:X}. Value: {:X}",
                 address, value
             ),
         }
@@ -399,7 +503,262 @@ impl Instructions {
 
     fn from_byte_prefixed(byte: u8) -> Option<Instructions> {
         match byte {
-            _ => None,
+            0x00 => Some(Instructions::RLC(ArithmeticSource::B)),
+            0x01 => Some(Instructions::RLC(ArithmeticSource::C)),
+            0x02 => Some(Instructions::RLC(ArithmeticSource::D)),
+            0x03 => Some(Instructions::RLC(ArithmeticSource::E)),
+            0x04 => Some(Instructions::RLC(ArithmeticSource::H)),
+            0x05 => Some(Instructions::RLC(ArithmeticSource::L)),
+            0x06 => Some(Instructions::RLC(ArithmeticSource::HLAddr)),
+            0x07 => Some(Instructions::RLC(ArithmeticSource::A)),
+            0x08 => Some(Instructions::RRC(ArithmeticSource::B)),
+            0x09 => Some(Instructions::RRC(ArithmeticSource::C)),
+            0x0A => Some(Instructions::RRC(ArithmeticSource::D)),
+            0x0B => Some(Instructions::RRC(ArithmeticSource::E)),
+            0x0C => Some(Instructions::RRC(ArithmeticSource::H)),
+            0x0D => Some(Instructions::RRC(ArithmeticSource::L)),
+            0x0E => Some(Instructions::RRC(ArithmeticSource::HLAddr)),
+            0x0F => Some(Instructions::RRC(ArithmeticSource::A)),
+            0x10 => Some(Instructions::RL(ArithmeticSource::B)),
+            0x11 => Some(Instructions::RL(ArithmeticSource::C)),
+            0x12 => Some(Instructions::RL(ArithmeticSource::D)),
+            0x13 => Some(Instructions::RL(ArithmeticSource::E)),
+            0x14 => Some(Instructions::RL(ArithmeticSource::H)),
+            0x15 => Some(Instructions::RL(ArithmeticSource::L)),
+            0x16 => Some(Instructions::RL(ArithmeticSource::HLAddr)),
+            0x17 => Some(Instructions::RL(ArithmeticSource::A)),
+            0x18 => Some(Instructions::RR(ArithmeticSource::B)),
+            0x19 => Some(Instructions::RR(ArithmeticSource::C)),
+            0x1A => Some(Instructions::RR(ArithmeticSource::D)),
+            0x1B => Some(Instructions::RR(ArithmeticSource::E)),
+            0x1C => Some(Instructions::RR(ArithmeticSource::H)),
+            0x1D => Some(Instructions::RR(ArithmeticSource::L)),
+            0x1E => Some(Instructions::RR(ArithmeticSource::HLAddr)),
+            0x1F => Some(Instructions::RR(ArithmeticSource::A)),
+            0x20 => Some(Instructions::SLA(ArithmeticSource::B)),
+            0x21 => Some(Instructions::SLA(ArithmeticSource::C)),
+            0x22 => Some(Instructions::SLA(ArithmeticSource::D)),
+            0x23 => Some(Instructions::SLA(ArithmeticSource::E)),
+            0x24 => Some(Instructions::SLA(ArithmeticSource::H)),
+            0x25 => Some(Instructions::SLA(ArithmeticSource::L)),
+            0x26 => Some(Instructions::SLA(ArithmeticSource::HLAddr)),
+            0x27 => Some(Instructions::SLA(ArithmeticSource::A)),
+            0x28 => Some(Instructions::SRA(ArithmeticSource::B)),
+            0x29 => Some(Instructions::SRA(ArithmeticSource::C)),
+            0x2A => Some(Instructions::SRA(ArithmeticSource::D)),
+            0x2B => Some(Instructions::SRA(ArithmeticSource::E)),
+            0x2C => Some(Instructions::SRA(ArithmeticSource::H)),
+            0x2D => Some(Instructions::SRA(ArithmeticSource::L)),
+            0x2E => Some(Instructions::SRA(ArithmeticSource::HLAddr)),
+            0x2F => Some(Instructions::SRA(ArithmeticSource::A)),
+            0x30 => Some(Instructions::SWAP(ArithmeticSource::B)),
+            0x31 => Some(Instructions::SWAP(ArithmeticSource::C)),
+            0x32 => Some(Instructions::SWAP(ArithmeticSource::D)),
+            0x33 => Some(Instructions::SWAP(ArithmeticSource::E)),
+            0x34 => Some(Instructions::SWAP(ArithmeticSource::H)),
+            0x35 => Some(Instructions::SWAP(ArithmeticSource::L)),
+            0x36 => Some(Instructions::SWAP(ArithmeticSource::HLAddr)),
+            0x37 => Some(Instructions::SWAP(ArithmeticSource::A)),
+            0x38 => Some(Instructions::SRL(ArithmeticSource::B)),
+            0x39 => Some(Instructions::SRL(ArithmeticSource::C)),
+            0x3A => Some(Instructions::SRL(ArithmeticSource::D)),
+            0x3B => Some(Instructions::SRL(ArithmeticSource::E)),
+            0x3C => Some(Instructions::SRL(ArithmeticSource::H)),
+            0x3D => Some(Instructions::SRL(ArithmeticSource::L)),
+            0x3E => Some(Instructions::SRL(ArithmeticSource::HLAddr)),
+            0x3F => Some(Instructions::SRL(ArithmeticSource::A)),
+            0x40 => Some(Instructions::BIT(0, ArithmeticSource::B)),
+            0x41 => Some(Instructions::BIT(0, ArithmeticSource::C)),
+            0x42 => Some(Instructions::BIT(0, ArithmeticSource::D)),
+            0x43 => Some(Instructions::BIT(0, ArithmeticSource::E)),
+            0x44 => Some(Instructions::BIT(0, ArithmeticSource::H)),
+            0x45 => Some(Instructions::BIT(0, ArithmeticSource::L)),
+            0x46 => Some(Instructions::BIT(0, ArithmeticSource::HLAddr)),
+            0x47 => Some(Instructions::BIT(0, ArithmeticSource::A)),
+            0x48 => Some(Instructions::BIT(1, ArithmeticSource::B)),
+            0x49 => Some(Instructions::BIT(1, ArithmeticSource::C)),
+            0x4A => Some(Instructions::BIT(1, ArithmeticSource::D)),
+            0x4B => Some(Instructions::BIT(1, ArithmeticSource::E)),
+            0x4C => Some(Instructions::BIT(1, ArithmeticSource::H)),
+            0x4D => Some(Instructions::BIT(1, ArithmeticSource::L)),
+            0x4E => Some(Instructions::BIT(1, ArithmeticSource::HLAddr)),
+            0x4F => Some(Instructions::BIT(1, ArithmeticSource::A)),
+            0x50 => Some(Instructions::BIT(2, ArithmeticSource::B)),
+            0x51 => Some(Instructions::BIT(2, ArithmeticSource::C)),
+            0x52 => Some(Instructions::BIT(2, ArithmeticSource::D)),
+            0x53 => Some(Instructions::BIT(2, ArithmeticSource::E)),
+            0x54 => Some(Instructions::BIT(2, ArithmeticSource::H)),
+            0x55 => Some(Instructions::BIT(2, ArithmeticSource::L)),
+            0x56 => Some(Instructions::BIT(2, ArithmeticSource::HLAddr)),
+            0x57 => Some(Instructions::BIT(2, ArithmeticSource::A)),
+            0x58 => Some(Instructions::BIT(3, ArithmeticSource::B)),
+            0x59 => Some(Instructions::BIT(3, ArithmeticSource::C)),
+            0x5A => Some(Instructions::BIT(3, ArithmeticSource::D)),
+            0x5B => Some(Instructions::BIT(3, ArithmeticSource::E)),
+            0x5C => Some(Instructions::BIT(3, ArithmeticSource::H)),
+            0x5D => Some(Instructions::BIT(3, ArithmeticSource::L)),
+            0x5E => Some(Instructions::BIT(3, ArithmeticSource::HLAddr)),
+            0x5F => Some(Instructions::BIT(3, ArithmeticSource::A)),
+            0x60 => Some(Instructions::BIT(4, ArithmeticSource::B)),
+            0x61 => Some(Instructions::BIT(4, ArithmeticSource::C)),
+            0x62 => Some(Instructions::BIT(4, ArithmeticSource::D)),
+            0x63 => Some(Instructions::BIT(4, ArithmeticSource::E)),
+            0x64 => Some(Instructions::BIT(4, ArithmeticSource::H)),
+            0x65 => Some(Instructions::BIT(4, ArithmeticSource::L)),
+            0x66 => Some(Instructions::BIT(4, ArithmeticSource::HLAddr)),
+            0x67 => Some(Instructions::BIT(4, ArithmeticSource::A)),
+            0x68 => Some(Instructions::BIT(5, ArithmeticSource::B)),
+            0x69 => Some(Instructions::BIT(5, ArithmeticSource::C)),
+            0x6A => Some(Instructions::BIT(5, ArithmeticSource::D)),
+            0x6B => Some(Instructions::BIT(5, ArithmeticSource::E)),
+            0x6C => Some(Instructions::BIT(5, ArithmeticSource::H)),
+            0x6D => Some(Instructions::BIT(5, ArithmeticSource::L)),
+            0x6E => Some(Instructions::BIT(5, ArithmeticSource::HLAddr)),
+            0x6F => Some(Instructions::BIT(5, ArithmeticSource::A)),
+            0x70 => Some(Instructions::BIT(6, ArithmeticSource::B)),
+            0x71 => Some(Instructions::BIT(6, ArithmeticSource::C)),
+            0x72 => Some(Instructions::BIT(6, ArithmeticSource::D)),
+            0x73 => Some(Instructions::BIT(6, ArithmeticSource::E)),
+            0x74 => Some(Instructions::BIT(6, ArithmeticSource::H)),
+            0x75 => Some(Instructions::BIT(6, ArithmeticSource::L)),
+            0x76 => Some(Instructions::BIT(6, ArithmeticSource::HLAddr)),
+            0x77 => Some(Instructions::BIT(6, ArithmeticSource::A)),
+            0x78 => Some(Instructions::BIT(7, ArithmeticSource::B)),
+            0x79 => Some(Instructions::BIT(7, ArithmeticSource::C)),
+            0x7A => Some(Instructions::BIT(7, ArithmeticSource::D)),
+            0x7B => Some(Instructions::BIT(7, ArithmeticSource::E)),
+            0x7C => Some(Instructions::BIT(7, ArithmeticSource::H)),
+            0x7D => Some(Instructions::BIT(7, ArithmeticSource::L)),
+            0x7E => Some(Instructions::BIT(7, ArithmeticSource::HLAddr)),
+            0x7F => Some(Instructions::BIT(7, ArithmeticSource::A)),
+            0x80 => Some(Instructions::RES(0, ArithmeticSource::B)),
+            0x81 => Some(Instructions::RES(0, ArithmeticSource::C)),
+            0x82 => Some(Instructions::RES(0, ArithmeticSource::D)),
+            0x83 => Some(Instructions::RES(0, ArithmeticSource::E)),
+            0x84 => Some(Instructions::RES(0, ArithmeticSource::H)),
+            0x85 => Some(Instructions::RES(0, ArithmeticSource::L)),
+            0x86 => Some(Instructions::RES(0, ArithmeticSource::HLAddr)),
+            0x87 => Some(Instructions::RES(0, ArithmeticSource::A)),
+            0x88 => Some(Instructions::RES(1, ArithmeticSource::B)),
+            0x89 => Some(Instructions::RES(1, ArithmeticSource::C)),
+            0x8A => Some(Instructions::RES(1, ArithmeticSource::D)),
+            0x8B => Some(Instructions::RES(1, ArithmeticSource::E)),
+            0x8C => Some(Instructions::RES(1, ArithmeticSource::H)),
+            0x8D => Some(Instructions::RES(1, ArithmeticSource::L)),
+            0x8E => Some(Instructions::RES(1, ArithmeticSource::HLAddr)),
+            0x8F => Some(Instructions::RES(1, ArithmeticSource::A)),
+            0x90 => Some(Instructions::RES(2, ArithmeticSource::B)),
+            0x91 => Some(Instructions::RES(2, ArithmeticSource::C)),
+            0x92 => Some(Instructions::RES(2, ArithmeticSource::D)),
+            0x93 => Some(Instructions::RES(2, ArithmeticSource::E)),
+            0x94 => Some(Instructions::RES(2, ArithmeticSource::H)),
+            0x95 => Some(Instructions::RES(2, ArithmeticSource::L)),
+            0x96 => Some(Instructions::RES(2, ArithmeticSource::HLAddr)),
+            0x97 => Some(Instructions::RES(2, ArithmeticSource::A)),
+            0x98 => Some(Instructions::RES(3, ArithmeticSource::B)),
+            0x99 => Some(Instructions::RES(3, ArithmeticSource::C)),
+            0x9A => Some(Instructions::RES(3, ArithmeticSource::D)),
+            0x9B => Some(Instructions::RES(3, ArithmeticSource::E)),
+            0x9C => Some(Instructions::RES(3, ArithmeticSource::H)),
+            0x9D => Some(Instructions::RES(3, ArithmeticSource::L)),
+            0x9E => Some(Instructions::RES(3, ArithmeticSource::HLAddr)),
+            0x9F => Some(Instructions::RES(3, ArithmeticSource::A)),
+            0xA0 => Some(Instructions::RES(4, ArithmeticSource::B)),
+            0xA1 => Some(Instructions::RES(4, ArithmeticSource::C)),
+            0xA2 => Some(Instructions::RES(4, ArithmeticSource::D)),
+            0xA3 => Some(Instructions::RES(4, ArithmeticSource::E)),
+            0xA4 => Some(Instructions::RES(4, ArithmeticSource::H)),
+            0xA5 => Some(Instructions::RES(4, ArithmeticSource::L)),
+            0xA6 => Some(Instructions::RES(4, ArithmeticSource::HLAddr)),
+            0xA7 => Some(Instructions::RES(4, ArithmeticSource::A)),
+            0xA8 => Some(Instructions::RES(5, ArithmeticSource::B)),
+            0xA9 => Some(Instructions::RES(5, ArithmeticSource::C)),
+            0xAA => Some(Instructions::RES(5, ArithmeticSource::D)),
+            0xAB => Some(Instructions::RES(5, ArithmeticSource::E)),
+            0xAC => Some(Instructions::RES(5, ArithmeticSource::H)),
+            0xAD => Some(Instructions::RES(5, ArithmeticSource::L)),
+            0xAE => Some(Instructions::RES(5, ArithmeticSource::HLAddr)),
+            0xAF => Some(Instructions::RES(5, ArithmeticSource::A)),
+            0xB0 => Some(Instructions::RES(6, ArithmeticSource::B)),
+            0xB1 => Some(Instructions::RES(6, ArithmeticSource::C)),
+            0xB2 => Some(Instructions::RES(6, ArithmeticSource::D)),
+            0xB3 => Some(Instructions::RES(6, ArithmeticSource::E)),
+            0xB4 => Some(Instructions::RES(6, ArithmeticSource::H)),
+            0xB5 => Some(Instructions::RES(6, ArithmeticSource::L)),
+            0xB6 => Some(Instructions::RES(6, ArithmeticSource::HLAddr)),
+            0xB7 => Some(Instructions::RES(6, ArithmeticSource::A)),
+            0xB8 => Some(Instructions::RES(7, ArithmeticSource::B)),
+            0xB9 => Some(Instructions::RES(7, ArithmeticSource::C)),
+            0xBA => Some(Instructions::RES(7, ArithmeticSource::D)),
+            0xBB => Some(Instructions::RES(7, ArithmeticSource::E)),
+            0xBC => Some(Instructions::RES(7, ArithmeticSource::H)),
+            0xBD => Some(Instructions::RES(7, ArithmeticSource::L)),
+            0xBE => Some(Instructions::RES(7, ArithmeticSource::HLAddr)),
+            0xBF => Some(Instructions::RES(7, ArithmeticSource::A)),
+            0xC0 => Some(Instructions::SET(0, ArithmeticSource::B)),
+            0xC1 => Some(Instructions::SET(0, ArithmeticSource::C)),
+            0xC2 => Some(Instructions::SET(0, ArithmeticSource::D)),
+            0xC3 => Some(Instructions::SET(0, ArithmeticSource::E)),
+            0xC4 => Some(Instructions::SET(0, ArithmeticSource::H)),
+            0xC5 => Some(Instructions::SET(0, ArithmeticSource::L)),
+            0xC6 => Some(Instructions::SET(0, ArithmeticSource::HLAddr)),
+            0xC7 => Some(Instructions::SET(0, ArithmeticSource::A)),
+            0xC8 => Some(Instructions::SET(1, ArithmeticSource::B)),
+            0xC9 => Some(Instructions::SET(1, ArithmeticSource::C)),
+            0xCA => Some(Instructions::SET(1, ArithmeticSource::D)),
+            0xCB => Some(Instructions::SET(1, ArithmeticSource::E)),
+            0xCC => Some(Instructions::SET(1, ArithmeticSource::H)),
+            0xCD => Some(Instructions::SET(1, ArithmeticSource::L)),
+            0xCE => Some(Instructions::SET(1, ArithmeticSource::HLAddr)),
+            0xCF => Some(Instructions::SET(1, ArithmeticSource::A)),
+            0xD0 => Some(Instructions::SET(2, ArithmeticSource::B)),
+            0xD1 => Some(Instructions::SET(2, ArithmeticSource::C)),
+            0xD2 => Some(Instructions::SET(2, ArithmeticSource::D)),
+            0xD3 => Some(Instructions::SET(2, ArithmeticSource::E)),
+            0xD4 => Some(Instructions::SET(2, ArithmeticSource::H)),
+            0xD5 => Some(Instructions::SET(2, ArithmeticSource::L)),
+            0xD6 => Some(Instructions::SET(2, ArithmeticSource::HLAddr)),
+            0xD7 => Some(Instructions::SET(2, ArithmeticSource::A)),
+            0xD8 => Some(Instructions::SET(3, ArithmeticSource::B)),
+            0xD9 => Some(Instructions::SET(3, ArithmeticSource::C)),
+            0xDA => Some(Instructions::SET(3, ArithmeticSource::D)),
+            0xDB => Some(Instructions::SET(3, ArithmeticSource::E)),
+            0xDC => Some(Instructions::SET(3, ArithmeticSource::H)),
+            0xDD => Some(Instructions::SET(3, ArithmeticSource::L)),
+            0xDE => Some(Instructions::SET(3, ArithmeticSource::HLAddr)),
+            0xDF => Some(Instructions::SET(3, ArithmeticSource::A)),
+            0xE0 => Some(Instructions::SET(4, ArithmeticSource::B)),
+            0xE1 => Some(Instructions::SET(4, ArithmeticSource::C)),
+            0xE2 => Some(Instructions::SET(4, ArithmeticSource::D)),
+            0xE3 => Some(Instructions::SET(4, ArithmeticSource::E)),
+            0xE4 => Some(Instructions::SET(4, ArithmeticSource::H)),
+            0xE5 => Some(Instructions::SET(4, ArithmeticSource::L)),
+            0xE6 => Some(Instructions::SET(4, ArithmeticSource::HLAddr)),
+            0xE7 => Some(Instructions::SET(4, ArithmeticSource::A)),
+            0xE8 => Some(Instructions::SET(5, ArithmeticSource::B)),
+            0xE9 => Some(Instructions::SET(5, ArithmeticSource::C)),
+            0xEA => Some(Instructions::SET(5, ArithmeticSource::D)),
+            0xEB => Some(Instructions::SET(5, ArithmeticSource::E)),
+            0xEC => Some(Instructions::SET(5, ArithmeticSource::H)),
+            0xED => Some(Instructions::SET(5, ArithmeticSource::L)),
+            0xEE => Some(Instructions::SET(5, ArithmeticSource::HLAddr)),
+            0xEF => Some(Instructions::SET(5, ArithmeticSource::A)),
+            0xF0 => Some(Instructions::SET(6, ArithmeticSource::B)),
+            0xF1 => Some(Instructions::SET(6, ArithmeticSource::C)),
+            0xF2 => Some(Instructions::SET(6, ArithmeticSource::D)),
+            0xF3 => Some(Instructions::SET(6, ArithmeticSource::E)),
+            0xF4 => Some(Instructions::SET(6, ArithmeticSource::H)),
+            0xF5 => Some(Instructions::SET(6, ArithmeticSource::L)),
+            0xF6 => Some(Instructions::SET(6, ArithmeticSource::HLAddr)),
+            0xF7 => Some(Instructions::SET(6, ArithmeticSource::A)),
+            0xF8 => Some(Instructions::SET(7, ArithmeticSource::B)),
+            0xF9 => Some(Instructions::SET(7, ArithmeticSource::C)),
+            0xFA => Some(Instructions::SET(7, ArithmeticSource::D)),
+            0xFB => Some(Instructions::SET(7, ArithmeticSource::E)),
+            0xFC => Some(Instructions::SET(7, ArithmeticSource::H)),
+            0xFD => Some(Instructions::SET(7, ArithmeticSource::L)),
+            0xFE => Some(Instructions::SET(7, ArithmeticSource::HLAddr)),
+            0xFF => Some(Instructions::SET(7, ArithmeticSource::A)),
         }
     }
 
@@ -962,17 +1321,346 @@ impl Instructions {
 }
 
 impl CPU {
-    pub fn emulate_cycle(&mut self) {
+    pub fn new(buffer: Vec<u8>) -> CPU {
+        CPU {
+            ime: false,
+            is_halted: false,
+            bus: MemoryBus {
+                memory: memory::MMU {
+                    game_rom: buffer,
+                    bios: [0; 0x100],
+                    cartridge_type: 0,
+                    wram: [0; 0x2000],
+                    zram: [0; 0x80],
+                    interrupt_enable: 0,
+                    interrupt_flag: 0,
+                    ram_enabled: false,
+                    ram_banks: [0; 0x8000],
+                    current_rom_bank: 1,
+                    current_ram_bank: 0,
+                    mbc1: false,
+                    mbc2: false,
+                },
+                timer: timer::Timer {
+                    timer_counter_tima: 0,
+                    divider_register: 0,
+                    divider_counter: 0,
+                    timer_modulo_tma: 0,
+                    clock_counter: 0,
+                    input_clock_speed: 1024,
+                    clock_enabled: false,
+                },
+                apu: audio::APU {},
+                keys: keys::Keys {
+                    joypad_state: 0,
+                    joypad_register: 0xFF,
+                },
+                gpu: gpu::GPU {
+                    screen_data: [[[0; 3]; 160]; 144],
+                    vram: [0; gpu::VRAM_SIZE],
+                    oam: [0; 0xA0],
+                    stat: 0,
+                    bg_palette: 0,
+                    obp0_palette: 0,
+                    obp1_palette: 0,
+                    lcd_enabled: false,
+                    window_tilemap_display_select: false, // Bit 6
+                    window_display_enable: false,         // Bit 5
+                    bg_window_tile_data_select: false,    // Bit 4
+                    bg_tile_map_display_select: false,    // Bit 3
+                    obj_size: false,                      // Bit 2
+                    obj_display_enable: false,            // Bit 1
+                    bg_window_display_priority: false,    // Bit 0
+                    scroll_x: 0,
+                    scroll_y: 0,
+                    lyc: 0,
+                    window_x: 0,
+                    window_y: 0,
+                    current_line: 0,
+                    scanline_counter: 456,
+                },
+            },
+            regs: Registers {
+                a: 0x01,
+                b: 0x00,
+                c: 0x13,
+                d: 0x00,
+                e: 0xD8,
+                f: FlagsRegister {
+                    zero: true,
+                    subtract: false,
+                    half_carry: true,
+                    carry: true,
+                },
+                h: 0x01,
+                l: 0x4D,
+            },
+            pc: 0x100,
+            sp: 0xFFFE,
+        }
+    }
+
+    pub fn initialize_system(&mut self) {
+        /* Power Up Sequence */
+        self.regs.set_af(0x01B0);
+        self.regs.set_bc(0x0013);
+        self.regs.set_de(0x00D8);
+        self.regs.set_hl(0xFFFE);
+        self.bus.write_byte(0xFF05, 0x00);
+        self.bus.write_byte(0xFF06, 0x00);
+        self.bus.write_byte(0xFF07, 0x00);
+        self.bus.write_byte(0xFF10, 0x80);
+        self.bus.write_byte(0xFF11, 0xBF);
+        self.bus.write_byte(0xFF12, 0xF3);
+        self.bus.write_byte(0xFF14, 0xBF);
+        self.bus.write_byte(0xFF16, 0x3F);
+        self.bus.write_byte(0xFF17, 0x00);
+        self.bus.write_byte(0xFF19, 0xBF);
+        self.bus.write_byte(0xFF1A, 0x7F);
+        self.bus.write_byte(0xFF1B, 0xFF);
+        self.bus.write_byte(0xFF1C, 0x9F);
+        self.bus.write_byte(0xFF1E, 0xBF);
+        self.bus.write_byte(0xFF20, 0xFF);
+        self.bus.write_byte(0xFF21, 0x00);
+        self.bus.write_byte(0xFF22, 0x00);
+        self.bus.write_byte(0xFF23, 0xBF);
+        self.bus.write_byte(0xFF24, 0x77);
+        self.bus.write_byte(0xFF25, 0xF3);
+        self.bus.write_byte(0xFF26, 0xF1);
+        self.bus.write_byte(0xFF40, 0x91);
+        self.bus.write_byte(0xFF42, 0x00);
+        self.bus.write_byte(0xFF43, 0x00);
+        self.bus.write_byte(0xFF45, 0x00);
+        self.bus.write_byte(0xFF47, 0xFC);
+        self.bus.write_byte(0xFF48, 0xFF);
+        self.bus.write_byte(0xFF49, 0xFF);
+        self.bus.write_byte(0xFF4A, 0x00);
+        self.bus.write_byte(0xFF4B, 0x00);
+        self.bus.write_byte(0xFFFF, 0x00);
+    }
+
+    pub fn update_emulator(&mut self) {
+        let mut current_cycles = 0;
+
+        while current_cycles < timer::MAX_CYCLES {
+            let cycles: u8 = self.execute_instruction();
+            current_cycles += cycles as u32;
+
+            /* Update timers */
+            self.update_timers(cycles);
+
+            /* Update graphics */
+            self.update_graphics(cycles);
+
+            /* Check for interrupts */
+            self.process_interrupts();
+        }
+
+        print!("Render called!");
+
+        self.render();
+    }
+
+    fn render(&mut self) {
+        unsafe {
+            gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
+            gl::ClearColor(0.3, 0.3, 0.5, 1.0);
+        }
+    }
+
+    fn update_graphics(&mut self, cycles: u8) {
+        self.set_status();
+
+        if self.bus.gpu.lcd_enabled {
+            self.bus.gpu.scanline_counter -= cycles as i16;
+        } else {
+            return;
+        }
+
+        if self.bus.gpu.scanline_counter <= 0 {
+            self.bus.gpu.current_line += 1;
+            self.bus.gpu.scanline_counter = 456;
+
+            match self.bus.gpu.current_line {
+                144 => self.set_interrupt(Interrupts::VBlank),
+                //0..=143 => self.bus.gpu.draw_scanline(),
+                _ => self.bus.gpu.current_line = 0,
+            }
+        }
+    }
+
+    fn set_status(&mut self) {
+        if !self.bus.gpu.lcd_enabled {
+            self.bus.gpu.scanline_counter = 456;
+            self.bus.gpu.current_line = 0;
+            self.bus.gpu.stat &= 0xFC;
+            self.bus.gpu.stat |= 0x01;
+            return;
+        }
+
+        let current_mode = self.bus.gpu.stat & 0b11;
+        let mode: u8;
+        let mut interrupt_requested: bool = false;
+
+        if self.bus.gpu.current_line >= 144 {
+            mode = 1;
+            self.bus.gpu.stat |= 0x01;
+            self.bus.gpu.stat &= 0xFD;
+            interrupt_requested = self.bus.gpu.stat & 0x10 != 0;
+        } else {
+            if self.bus.gpu.scanline_counter >= 376 {
+                mode = 2;
+                self.bus.gpu.stat |= 0x02;
+                self.bus.gpu.stat &= 0xFE;
+                interrupt_requested = self.bus.gpu.stat & 0x20 != 0;
+            } else if self.bus.gpu.scanline_counter >= 204 {
+                mode = 3;
+                self.bus.gpu.stat |= 0x03;
+            } else {
+                mode = 0;
+                self.bus.gpu.stat &= 0xFC;
+                interrupt_requested = self.bus.gpu.stat & 0x03 != 0;
+            }
+        }
+
+        if interrupt_requested && (mode != current_mode) {
+            self.set_interrupt(Interrupts::LCDStat);
+        }
+
+        if self.bus.gpu.lyc == self.bus.gpu.current_line {
+            self.bus.gpu.stat |= 0x04;
+            if self.bus.gpu.stat & 0x20 != 0 {
+                self.set_interrupt(Interrupts::LCDStat);
+            }
+        } else {
+            self.bus.gpu.stat &= 0xFB;
+        }
+    }
+
+    fn update_timers(&mut self, cycles: u8) {
+        /* Divider Register */
+        self.bus.timer.divider_counter += cycles as u32;
+        if self.bus.timer.divider_counter >= 255 {
+            self.bus.timer.divider_counter = 0;
+            self.bus.timer.divider_register += 1;
+        }
+
+        if self.bus.timer.clock_enabled {
+            self.bus.timer.clock_counter += cycles as u16;
+
+            if self.bus.timer.clock_counter >= self.bus.timer.input_clock_speed as u16 {
+                self.bus.timer.clock_counter = 0;
+
+                if self.bus.timer.timer_counter_tima == 255 {
+                    self.bus.timer.timer_counter_tima = self.bus.timer.timer_modulo_tma;
+                    self.set_interrupt(Interrupts::Timer);
+                } else {
+                    self.bus.timer.timer_counter_tima += 1;
+                }
+            }
+        }
+    }
+
+    fn set_interrupt(&mut self, interrupt: Interrupts) {
+        let mask = match interrupt {
+            Interrupts::VBlank => 0x01,
+            Interrupts::LCDStat => 0x02,
+            Interrupts::Timer => 0x04,
+            //Interrupts::Serial => 0x08,
+            Interrupts::Joypad => 0x10,
+        };
+
+        self.bus.memory.interrupt_flag |= mask;
+    }
+
+    fn process_interrupts(&mut self) {
+        /* Check for interrupts */
+        if self.ime
+            && (self.bus.memory.interrupt_enable != 0)
+            && (self.bus.memory.interrupt_flag != 0)
+        {
+            let fired = self.bus.memory.interrupt_enable & self.bus.memory.interrupt_flag;
+
+            if (fired & 0x01) != 0 {
+                self.bus.memory.interrupt_flag &= 0xFE;
+                println!("Interrupt 0x01 Requested!");
+                self.rst40();
+            } else if (fired & 0x02) != 0 {
+                self.bus.memory.interrupt_flag &= 0xFD;
+                println!("Interrupt 0x01 Requested!");
+                self.rst48();
+            } else if (fired & 0x04) != 0 {
+                self.bus.memory.interrupt_flag &= 0xFB;
+                println!("Interrupt 0x01 Requested!");
+                self.rst50();
+            } else if (fired & 0x08) != 0 {
+                self.bus.memory.interrupt_flag &= 0xF7;
+                println!("Interrupt 0x01 Requested!");
+                self.rst58();
+            } else if (fired & 0x0F) != 0 {
+                self.bus.memory.interrupt_flag &= 0xEF;
+                println!("Interrupt 0x01 Requested!");
+                self.rst60();
+            } else {
+                self.ime = true;
+            }
+        }
+    }
+
+    pub fn set_key_pressed(&mut self, key: u8) {
+        let mut state = self.bus.keys.joypad_state;
+        let mut previously_unset: bool = false;
+
+        if state & (1 << key) == 0 {
+            previously_unset = true;
+        }
+
+        let mask: u8 = !(1 << key);
+        state &= mask;
+
+        let button: bool;
+
+        if key > 3 {
+            button = true;
+        } else {
+            button = false;
+        }
+
+        let mut interrupt_requested = false;
+        let reg = self.bus.keys.joypad_register;
+
+        if button && (reg & 0x20 == 0) {
+            //Button
+            interrupt_requested = true;
+        } else if button && (reg & 0x10 == 0) {
+            //Direction
+            interrupt_requested = true;
+        }
+
+        if interrupt_requested && !previously_unset {
+            self.set_interrupt(Interrupts::Joypad);
+        }
+
+        self.bus.keys.joypad_state = state;
+    }
+
+    pub fn set_key_released(&mut self, key: u8) {
+        self.bus.keys.joypad_state |= 1 << key;
+    }
+
+    pub fn execute_instruction(&mut self) -> u8 {
         let mut instruction = self.bus.read_byte(self.pc);
         let prefixed = instruction == 0xCB;
         if prefixed {
             instruction = self.bus.read_byte(self.pc + 1);
         }
 
-        let description = format!("0x{}{:X}", if prefixed { "CB" } else { "" }, instruction);
-        println!("Current Opcode: {}", description);
+        //let description = format!("0x{}{:X}", if prefixed { "CB" } else { "" }, instruction);
+        //print!("{} ", description);
 
-        let next = if let Some(instruction) = Instructions::from_byte(instruction, prefixed) {
+        let (next, cycles) = if let Some(instruction) =
+            Instructions::from_byte(instruction, prefixed)
+        {
             self.decode_instruction(instruction)
         } else {
             let description = format!("0x{}{:X}", if prefixed { "CB" } else { "" }, instruction);
@@ -980,19 +1668,10 @@ impl CPU {
         };
 
         self.pc = next;
-
-        if self.ime
-            && (self.bus.memory.interrupt_enable != 0)
-            && (self.bus.memory.interrupt_flag != 0)
-        {
-            let fired = self.bus.memory.interrupt_enable & self.bus.memory.interrupt_flag;
-            if fired & 0x01 != 0 {
-                self.bus.memory.interrupt_flag &= 0xFE;
-                self.rst40();
-            }
-        }
+        cycles
     }
 
+    /* V-Blank Interrupt */
     fn rst40(&mut self) {
         self.ime = false;
         self.sp -= 2;
@@ -1000,9 +1679,41 @@ impl CPU {
         self.pc = 0x40;
     }
 
-    fn decode_instruction(&mut self, instruction: Instructions) -> u16 {
+    /* LCD Status Triggers */
+    fn rst48(&mut self) {
+        self.ime = false;
+        self.sp -= 2;
+        self.bus.write_word(self.sp, self.pc + 1);
+        self.pc = 0x48;
+    }
+
+    /* Timer Overflow */
+    fn rst50(&mut self) {
+        self.ime = false;
+        self.sp -= 2;
+        self.bus.write_word(self.sp, self.pc + 1);
+        self.pc = 0x50;
+    }
+
+    /* Serial Link */
+    fn rst58(&mut self) {
+        self.ime = false;
+        self.sp -= 2;
+        self.bus.write_word(self.sp, self.pc + 1);
+        self.pc = 0x58;
+    }
+
+    /* Joypad Press */
+    fn rst60(&mut self) {
+        self.ime = false;
+        self.sp -= 2;
+        self.bus.write_word(self.sp, self.pc + 1);
+        self.pc = 0x60;
+    }
+
+    fn decode_instruction(&mut self, instruction: Instructions) -> (u16, u8) {
         if self.is_halted {
-            return self.pc;
+            return (self.pc, 4);
         }
 
         match instruction {
@@ -1034,26 +1745,29 @@ impl CPU {
                     self.regs.f.carry = true;
                 }
 
-                self.pc.wrapping_add(1)
+                (self.pc.wrapping_add(1), 4)
             }
 
             Instructions::RETI() => {
                 self.ime = true;
                 self.sp += 2;
-                self.bus.read_word(self.sp - 2)
+                (self.bus.read_word(self.sp - 2), 16)
             }
 
             Instructions::DI() => {
                 self.ime = false;
-                self.pc.wrapping_add(1)
+                (self.pc.wrapping_add(1), 4)
             }
 
             Instructions::EI() => {
                 self.ime = true;
-                self.pc.wrapping_add(1)
+                (self.pc.wrapping_add(1), 4)
             }
 
-            Instructions::HALT() => self.pc,
+            Instructions::HALT() => {
+                self.is_halted = true;
+                (self.pc, 4)
+            }
 
             Instructions::RST(target) => {
                 let location = match target {
@@ -1069,7 +1783,7 @@ impl CPU {
 
                 self.sp -= 2;
                 self.bus.write_word(self.sp, self.pc + 1);
-                location
+                (location, 16)
             }
 
             Instructions::CALL(test) => {
@@ -1080,6 +1794,7 @@ impl CPU {
                     JumpTest::NotCarry => !self.regs.f.carry,
                     JumpTest::Always => true,
                 };
+
                 self.call(jump_condition)
             }
 
@@ -1089,7 +1804,99 @@ impl CPU {
                 self.regs.f.zero = self.regs.a == 0;
                 self.regs.f.half_carry = false;
                 self.regs.f.subtract = false;
-                self.pc.wrapping_add(1)
+                (self.pc.wrapping_add(1), 4)
+            }
+
+            Instructions::RLC(source) => {
+                let new_value: u8;
+
+                let mut register = match source {
+                    ArithmeticSource::A => self.regs.a,
+                    ArithmeticSource::B => self.regs.b,
+                    ArithmeticSource::C => self.regs.c,
+                    ArithmeticSource::D => self.regs.d,
+                    ArithmeticSource::E => self.regs.e,
+                    ArithmeticSource::H => self.regs.h,
+                    ArithmeticSource::L => self.regs.l,
+                    ArithmeticSource::HLAddr => self.bus.read_byte(self.regs.get_hl()),
+                    _ => panic!(),
+                };
+
+                match source {
+                    ArithmeticSource::A => {
+                        register = !!(register & 0x80);
+                        new_value = (self.regs.a << 1) | register;
+                        self.regs.a = new_value;
+                        self.regs.f.carry = self.regs.a & 0x80 == 0x80;
+                        self.regs.f.zero = self.regs.a == 0;
+                    }
+
+                    ArithmeticSource::B => {
+                        register = !!(register & 0x80);
+                        new_value = (self.regs.b << 1) | register;
+                        self.regs.b = new_value;
+                        self.regs.f.carry = self.regs.b & 0x80 == 0x80;
+                        self.regs.f.zero = self.regs.b == 0;
+                    }
+
+                    ArithmeticSource::C => {
+                        register = !!(register & 0x80);
+                        new_value = (self.regs.c << 1) | register;
+                        self.regs.c = new_value;
+                        self.regs.f.carry = self.regs.c & 0x80 == 0x80;
+                        self.regs.f.zero = self.regs.c == 0;
+                    }
+
+                    ArithmeticSource::D => {
+                        register = !!(register & 0x80);
+                        new_value = (self.regs.d << 1) | register;
+                        self.regs.d = new_value;
+                        self.regs.f.carry = self.regs.d & 0x80 == 0x80;
+                        self.regs.f.zero = self.regs.d == 0;
+                    }
+
+                    ArithmeticSource::E => {
+                        register = !!(register & 0x80);
+                        new_value = (self.regs.e << 1) | register;
+                        self.regs.e = new_value;
+                        self.regs.f.carry = self.regs.e & 0x80 == 0x80;
+                        self.regs.f.zero = self.regs.e == 0;
+                    }
+
+                    ArithmeticSource::H => {
+                        register = !!(register & 0x80);
+                        new_value = (self.regs.h << 1) | register;
+                        self.regs.h = new_value;
+                        self.regs.f.carry = self.regs.h & 0x80 == 0x80;
+                        self.regs.f.zero = self.regs.h == 0;
+                    }
+
+                    ArithmeticSource::L => {
+                        register = !!(register & 0x80);
+                        new_value = (self.regs.l << 1) | register;
+                        self.regs.l = new_value;
+                        self.regs.f.carry = self.regs.l & 0x80 == 0x80;
+                        self.regs.f.zero = self.regs.l == 0;
+                    }
+
+                    ArithmeticSource::HLAddr => {
+                        let bit = !!(register & 0x80);
+                        self.regs.f.carry = bit != 0;
+                        register = register << 1 | bit;
+                        self.bus.write_byte(self.regs.get_hl(), register);
+                        self.regs.f.zero = register == 0;
+                        self.regs.f.subtract = false;
+                        self.regs.f.half_carry = false;
+                        return (self.pc.wrapping_add(2), 16);
+                    }
+
+                    _ => panic!(),
+                }
+
+                self.regs.f.subtract = false;
+                self.regs.f.half_carry = false;
+
+                (self.pc.wrapping_add(2), 8)
             }
 
             Instructions::RLA() => {
@@ -1098,28 +1905,72 @@ impl CPU {
                 self.regs.f.zero = self.regs.a == 0;
                 self.regs.f.half_carry = false;
                 self.regs.f.subtract = false;
-                self.pc.wrapping_add(1)
+                (self.pc.wrapping_add(1), 4)
+            }
+
+            Instructions::RL(source) => {
+                if source == ArithmeticSource::HLAddr {
+                    let mut value = self.bus.read_byte(self.regs.get_hl());
+                    self.regs.f.carry = value & 0x80 != 0;
+                    value = (value << 1) | self.regs.f.carry as u8;
+                    self.bus.write_byte(self.regs.get_hl(), value);
+                    self.regs.f.zero = value == 0;
+                    self.regs.f.subtract = false;
+                    self.regs.f.half_carry = false;
+                    return (self.pc.wrapping_add(2), 16);
+                }
+
+                let reg: u8 = match source {
+                    ArithmeticSource::A => self.regs.a,
+                    ArithmeticSource::B => self.regs.b,
+                    ArithmeticSource::C => self.regs.c,
+                    ArithmeticSource::D => self.regs.d,
+                    ArithmeticSource::E => self.regs.e,
+                    ArithmeticSource::H => self.regs.h,
+                    ArithmeticSource::L => self.regs.l,
+                    _ => panic!(),
+                };
+
+                self.regs.f.carry = reg & 0x80 != 0;
+                let new_value = (reg << 1) | (self.regs.f.carry as u8);
+
+                match source {
+                    ArithmeticSource::A => self.regs.a = new_value,
+                    ArithmeticSource::B => self.regs.b = new_value,
+                    ArithmeticSource::C => self.regs.c = new_value,
+                    ArithmeticSource::D => self.regs.d = new_value,
+                    ArithmeticSource::E => self.regs.e = new_value,
+                    ArithmeticSource::H => self.regs.h = new_value,
+                    ArithmeticSource::L => self.regs.l = new_value,
+                    _ => panic!(),
+                }
+
+                self.regs.f.zero = new_value == 0;
+                self.regs.f.subtract = false;
+                self.regs.f.half_carry = false;
+
+                (self.pc.wrapping_add(2), 8)
             }
 
             Instructions::CCF() => {
                 self.regs.f.subtract = false;
                 self.regs.f.half_carry = false;
                 self.regs.f.carry = !self.regs.f.carry;
-                self.pc.wrapping_add(1)
+                (self.pc.wrapping_add(1), 4)
             }
 
             Instructions::CPL() => {
                 self.regs.f.half_carry = true;
                 self.regs.f.subtract = true;
                 self.regs.a = !self.regs.a;
-                self.pc.wrapping_add(1)
+                (self.pc.wrapping_add(1), 4)
             }
 
             Instructions::SCF() => {
                 self.regs.f.subtract = false;
                 self.regs.f.half_carry = false;
                 self.regs.f.carry = true;
-                self.pc.wrapping_add(1)
+                (self.pc.wrapping_add(1), 4)
             }
 
             Instructions::RRCA() => {
@@ -1128,7 +1979,134 @@ impl CPU {
                 self.regs.f.zero = self.regs.a == 0;
                 self.regs.f.subtract = false;
                 self.regs.f.half_carry = false;
-                self.pc.wrapping_add(1)
+                (self.pc.wrapping_add(1), 4)
+            }
+
+            Instructions::RRC(source) => {
+                let mut value = match source {
+                    ArithmeticSource::A => self.regs.a,
+                    ArithmeticSource::B => self.regs.b,
+                    ArithmeticSource::C => self.regs.c,
+                    ArithmeticSource::D => self.regs.d,
+                    ArithmeticSource::E => self.regs.e,
+                    ArithmeticSource::H => self.regs.h,
+                    ArithmeticSource::L => self.regs.l,
+                    ArithmeticSource::HLAddr => self.bus.read_byte(self.regs.get_hl()),
+                    _ => panic!(),
+                };
+
+                match source {
+                    ArithmeticSource::A => {
+                        value &= 0x01;
+                        self.regs.f.carry = value != 0;
+                        self.regs.a = self.regs.a >> 1 | value << 7;
+                        self.regs.f.zero = self.regs.a == 0;
+                    }
+
+                    ArithmeticSource::B => {
+                        value &= 0x01;
+                        self.regs.f.carry = value != 0;
+                        self.regs.b = self.regs.b >> 1 | value << 7;
+                        self.regs.f.zero = self.regs.b == 0;
+                    }
+
+                    ArithmeticSource::C => {
+                        value &= 0x01;
+                        self.regs.f.carry = value != 0;
+                        self.regs.c = self.regs.c >> 1 | value << 7;
+                        self.regs.f.zero = self.regs.c == 0;
+                    }
+
+                    ArithmeticSource::D => {
+                        value &= 0x01;
+                        self.regs.f.carry = value != 0;
+                        self.regs.d = self.regs.d >> 1 | value << 7;
+                        self.regs.f.zero = self.regs.d == 0;
+                    }
+
+                    ArithmeticSource::E => {
+                        value &= 0x01;
+                        self.regs.f.carry = value != 0;
+                        self.regs.e = self.regs.e >> 1 | value << 7;
+                        self.regs.f.zero = self.regs.e == 0;
+                    }
+
+                    ArithmeticSource::H => {
+                        value &= 0x01;
+                        self.regs.f.carry = value != 0;
+                        self.regs.h = self.regs.h >> 1 | value << 7;
+                        self.regs.f.zero = self.regs.h == 0;
+                    }
+
+                    ArithmeticSource::L => {
+                        value &= 0x01;
+                        self.regs.f.carry = value != 0;
+                        self.regs.l = self.regs.l >> 1 | value << 7;
+                        self.regs.f.zero = self.regs.l == 0;
+                    }
+
+                    ArithmeticSource::HLAddr => {
+                        value &= 0x01;
+                        self.regs.f.carry = value != 0;
+                        value = value >> 1 | value << 7;
+                        self.bus.write_byte(self.regs.get_hl(), value);
+                        self.regs.f.zero = value == 0;
+                        self.regs.f.subtract = false;
+                        self.regs.f.half_carry = false;
+                        return (self.pc.wrapping_add(2), 16);
+                    }
+
+                    _ => panic!(),
+                }
+
+                self.regs.f.subtract = false;
+                self.regs.f.half_carry = false;
+
+                (self.pc.wrapping_add(2), 8)
+            }
+
+            Instructions::RR(source) => {
+                if source == ArithmeticSource::HLAddr {
+                    let mut value = self.bus.read_byte(self.regs.get_hl());
+                    self.regs.f.carry = value & 0x01 != 0;
+                    value = (value >> 1) | ((self.regs.f.carry as u8) << 7);
+                    self.regs.f.zero = value == 0;
+                    self.bus.write_byte(self.regs.get_hl(), value);
+                    self.regs.f.subtract = false;
+                    self.regs.f.half_carry = false;
+                    return (self.pc.wrapping_add(2), 16);
+                }
+
+                let reg: &u8 = match source {
+                    ArithmeticSource::A => &self.regs.a,
+                    ArithmeticSource::B => &self.regs.b,
+                    ArithmeticSource::C => &self.regs.c,
+                    ArithmeticSource::D => &self.regs.d,
+                    ArithmeticSource::E => &self.regs.e,
+                    ArithmeticSource::H => &self.regs.h,
+                    ArithmeticSource::L => &self.regs.l,
+                    _ => panic!(),
+                };
+
+                self.regs.f.carry = *reg & 0x01 != 0;
+                let new_value = (*reg >> 1) | ((self.regs.f.carry as u8) << 7);
+
+                match source {
+                    ArithmeticSource::A => self.regs.a = new_value,
+                    ArithmeticSource::B => self.regs.b = new_value,
+                    ArithmeticSource::C => self.regs.c = new_value,
+                    ArithmeticSource::D => self.regs.d = new_value,
+                    ArithmeticSource::E => self.regs.e = new_value,
+                    ArithmeticSource::H => self.regs.h = new_value,
+                    ArithmeticSource::L => self.regs.l = new_value,
+                    _ => panic!(),
+                };
+
+                self.regs.f.zero = new_value == 0;
+                self.regs.f.subtract = false;
+                self.regs.f.half_carry = false;
+
+                (self.pc.wrapping_add(2), 8)
             }
 
             Instructions::RRA() => {
@@ -1137,7 +2115,7 @@ impl CPU {
                 self.regs.f.zero = self.regs.a == 0;
                 self.regs.f.subtract = false;
                 self.regs.f.half_carry = false;
-                self.pc.wrapping_add(1)
+                (self.pc.wrapping_add(1), 4)
             }
 
             Instructions::RET(test) => {
@@ -1148,7 +2126,13 @@ impl CPU {
                     JumpTest::NotCarry => !self.regs.f.carry,
                     JumpTest::Always => true,
                 };
-                self.return_(jump_condition)
+
+                if test == JumpTest::Always {
+                    let (next_pc, cycle) = self.return_(jump_condition);
+                    (next_pc, cycle - 4)
+                } else {
+                    self.return_(jump_condition)
+                }
             }
 
             Instructions::JR(test) => {
@@ -1175,11 +2159,9 @@ impl CPU {
                 self.jump(jump_condition)
             }
 
-            Instructions::JPHL() => self.regs.get_hl(),
+            Instructions::JPHL() => (self.regs.get_hl(), 4),
 
-            Instructions::NOP() => {
-                return self.pc.wrapping_add(1);
-            }
+            Instructions::NOP() => (self.pc.wrapping_add(1), 4),
 
             Instructions::DEC(target) => {
                 let new_value: u8;
@@ -1239,7 +2221,12 @@ impl CPU {
                     }
                 }
 
-                self.pc.wrapping_sub(1)
+                match target {
+                    IncDecTarget::HL | IncDecTarget::BC | IncDecTarget::DE | IncDecTarget::SP => {
+                        (self.pc.wrapping_sub(1), 8)
+                    }
+                    _ => (self.pc.wrapping_sub(1), 4),
+                }
             }
 
             Instructions::INC(target) => {
@@ -1300,7 +2287,13 @@ impl CPU {
                     }
                 }
 
-                self.pc.wrapping_add(1)
+                match target {
+                    IncDecTarget::HL | IncDecTarget::BC | IncDecTarget::DE | IncDecTarget::SP => {
+                        (self.pc.wrapping_add(1), 8)
+                    }
+                    IncDecTarget::HLAddr => (self.pc.wrapping_add(1), 12),
+                    _ => (self.pc.wrapping_add(1), 4),
+                }
             }
 
             Instructions::LDH(load_type) => match load_type {
@@ -1332,7 +2325,13 @@ impl CPU {
                         }
                     }
 
-                    self.pc.wrapping_add(1)
+                    if (target == LoadOtherTarget::A) && (source == LoadOtherSource::A8) {
+                        (self.pc.wrapping_add(1), 12)
+                    } else if target == LoadOtherTarget::A8 {
+                        (self.pc.wrapping_add(1), 12)
+                    } else {
+                        (self.pc.wrapping_add(1), 8)
+                    }
                 }
 
                 _ => panic!("Unimplemented!"),
@@ -1366,9 +2365,10 @@ impl CPU {
                     }
 
                     match source {
-                        LoadWordSource::HL => self.pc.wrapping_add(1),
-                        LoadWordSource::SPr8 => self.pc.wrapping_add(2),
-                        LoadWordSource::D16 | LoadWordSource::SP => self.pc.wrapping_add(3),
+                        LoadWordSource::HL => (self.pc.wrapping_add(1), 8),
+                        LoadWordSource::SPr8 => (self.pc.wrapping_add(2), 12),
+                        LoadWordSource::D16 => (self.pc.wrapping_add(3), 12),
+                        LoadWordSource::SP => (self.pc.wrapping_add(3), 20),
                     }
                 }
 
@@ -1409,11 +2409,11 @@ impl CPU {
                         }
                         LoadByteTarget::HLI => {
                             self.bus.write_byte(self.regs.get_hl(), source_value);
-                            self.regs.set_hl(self.regs.get_hl() + 1);
+                            self.regs.set_hl(self.regs.get_hl().wrapping_add(1));
                         }
                         LoadByteTarget::HLD => {
                             self.bus.write_byte(self.regs.get_hl(), source_value);
-                            self.regs.set_hl(self.regs.get_hl() - 1);
+                            self.regs.set_hl(self.regs.get_hl().wrapping_sub(1));
                         }
                         LoadByteTarget::BC => {
                             self.bus.write_byte(self.regs.get_bc(), source_value);
@@ -1423,14 +2423,35 @@ impl CPU {
                         }
                         LoadByteTarget::A16 => {
                             self.bus.write_byte(self.read_next_word(), source_value);
-                            return self.pc.wrapping_add(3);
+                            return (self.pc.wrapping_add(3), 16);
                         }
                     }
 
-                    match source {
-                        LoadByteSource::D8 => self.pc.wrapping_add(2),
-                        LoadByteSource::A16 => self.pc.wrapping_add(3),
-                        _ => self.pc.wrapping_add(1),
+                    if source == LoadByteSource::D8 {
+                        if target == LoadByteTarget::HL {
+                            (self.pc.wrapping_add(2), 12)
+                        } else {
+                            (self.pc.wrapping_add(2), 8)
+                        }
+                    } else if source == LoadByteSource::HL {
+                        (self.pc.wrapping_add(1), 8)
+                    } else if (target == LoadByteTarget::HL)
+                        || (target == LoadByteTarget::HLD)
+                        || (target == LoadByteTarget::HLI)
+                    {
+                        (self.pc.wrapping_add(1), 8)
+                    } else if (target == LoadByteTarget::BC) || (target == LoadByteTarget::DE) {
+                        (self.pc.wrapping_add(1), 8)
+                    } else if (source == LoadByteSource::BC)
+                        || (source == LoadByteSource::DE)
+                        || (source == LoadByteSource::HLD)
+                        || (source == LoadByteSource::HLI)
+                    {
+                        (self.pc.wrapping_add(1), 8)
+                    } else if source == LoadByteSource::A16 {
+                        (self.pc.wrapping_add(3), 16)
+                    } else {
+                        (self.pc.wrapping_add(1), 4)
                     }
                 }
 
@@ -1446,7 +2467,7 @@ impl CPU {
                 };
 
                 self.push(value);
-                return self.pc.wrapping_add(1);
+                (self.pc.wrapping_add(1), 16)
             }
 
             Instructions::POP(target) => {
@@ -1458,7 +2479,7 @@ impl CPU {
                     StackTarget::HL => self.regs.set_hl(result),
                 };
 
-                return self.pc.wrapping_add(1);
+                (self.pc.wrapping_add(1), 12)
             }
 
             Instructions::CP(target, source) => {
@@ -1493,8 +2514,9 @@ impl CPU {
                 }
 
                 match source {
-                    ArithmeticSource::U8 => self.pc.wrapping_add(2),
-                    _ => self.pc.wrapping_add(1),
+                    ArithmeticSource::U8 => (self.pc.wrapping_add(2), 8),
+                    ArithmeticSource::HLAddr => (self.pc.wrapping_add(1), 8),
+                    _ => (self.pc.wrapping_add(1), 4),
                 }
             }
 
@@ -1528,8 +2550,9 @@ impl CPU {
                 }
 
                 match source {
-                    ArithmeticSource::U8 => self.pc.wrapping_add(2),
-                    _ => self.pc.wrapping_add(1),
+                    ArithmeticSource::U8 => (self.pc.wrapping_add(2), 8),
+                    ArithmeticSource::HLAddr => (self.pc.wrapping_add(1), 8),
+                    _ => (self.pc.wrapping_add(1), 4),
                 }
             }
 
@@ -1563,8 +2586,9 @@ impl CPU {
                 }
 
                 match source {
-                    ArithmeticSource::U8 => self.pc.wrapping_add(2),
-                    _ => self.pc.wrapping_add(1),
+                    ArithmeticSource::U8 => (self.pc.wrapping_add(2), 8),
+                    ArithmeticSource::HLAddr => (self.pc.wrapping_add(1), 8),
+                    _ => (self.pc.wrapping_add(1), 4),
                 }
             }
 
@@ -1598,8 +2622,9 @@ impl CPU {
                 }
 
                 match source {
-                    ArithmeticSource::U8 => self.pc.wrapping_add(2),
-                    _ => self.pc.wrapping_add(1),
+                    ArithmeticSource::U8 => (self.pc.wrapping_add(2), 8),
+                    ArithmeticSource::HLAddr => (self.pc.wrapping_add(1), 8),
+                    _ => (self.pc.wrapping_add(1), 4),
                 }
             }
 
@@ -1630,8 +2655,263 @@ impl CPU {
                 }
 
                 match source {
-                    ArithmeticSource::U8 => self.pc.wrapping_add(2),
-                    _ => self.pc.wrapping_add(1),
+                    ArithmeticSource::U8 => (self.pc.wrapping_add(2), 8),
+                    ArithmeticSource::HLAddr => (self.pc.wrapping_add(1), 8),
+                    _ => (self.pc.wrapping_add(1), 4),
+                }
+            }
+
+            Instructions::SLA(source) => {
+                if source == ArithmeticSource::HLAddr {
+                    let mut value = self.bus.read_byte(self.regs.get_hl());
+                    self.regs.f.carry = value & 0x80 != 0;
+                    value <<= 1;
+                    self.bus.write_byte(self.regs.get_hl(), value);
+                    self.regs.f.zero = value == 0;
+                    self.regs.f.subtract = false;
+                    self.regs.f.half_carry = false;
+                    return (self.pc.wrapping_add(2), 16);
+                }
+
+                let reg: &u8 = match source {
+                    ArithmeticSource::A => &self.regs.a,
+                    ArithmeticSource::B => &self.regs.b,
+                    ArithmeticSource::C => &self.regs.c,
+                    ArithmeticSource::D => &self.regs.d,
+                    ArithmeticSource::E => &self.regs.e,
+                    ArithmeticSource::H => &self.regs.h,
+                    ArithmeticSource::L => &self.regs.l,
+                    _ => panic!(),
+                };
+
+                self.regs.f.carry = *reg & 0x80 != 0;
+                let new_value = *reg << 1;
+
+                match source {
+                    ArithmeticSource::A => self.regs.a = new_value,
+                    ArithmeticSource::B => self.regs.b = new_value,
+                    ArithmeticSource::C => self.regs.c = new_value,
+                    ArithmeticSource::D => self.regs.d = new_value,
+                    ArithmeticSource::E => self.regs.e = new_value,
+                    ArithmeticSource::H => self.regs.h = new_value,
+                    ArithmeticSource::L => self.regs.l = new_value,
+                    _ => panic!(),
+                };
+
+                self.regs.f.zero = new_value == 0;
+                self.regs.f.subtract = false;
+                self.regs.f.half_carry = false;
+
+                (self.pc.wrapping_add(2), 8)
+            }
+
+            Instructions::SRA(source) => {
+                if source == ArithmeticSource::HLAddr {
+                    let mut value = self.bus.read_byte(self.regs.get_hl());
+                    self.regs.f.carry = value & 0x01 != 0;
+                    value = value >> 1 | (value & 0x80);
+                    self.bus.write_byte(self.regs.get_hl(), value);
+                    self.regs.f.zero = value == 0;
+                    self.regs.f.subtract = false;
+                    self.regs.f.half_carry = false;
+                    return (self.pc.wrapping_add(2), 16);
+                }
+
+                let reg: &u8 = match source {
+                    ArithmeticSource::A => &self.regs.a,
+                    ArithmeticSource::B => &self.regs.b,
+                    ArithmeticSource::C => &self.regs.c,
+                    ArithmeticSource::D => &self.regs.d,
+                    ArithmeticSource::E => &self.regs.e,
+                    ArithmeticSource::H => &self.regs.h,
+                    ArithmeticSource::L => &self.regs.l,
+                    _ => panic!(),
+                };
+
+                self.regs.f.carry = *reg & 0x01 != 0;
+                let new_value = *reg >> 1 | (*reg & 0x80);
+
+                match source {
+                    ArithmeticSource::A => self.regs.a = new_value,
+                    ArithmeticSource::B => self.regs.b = new_value,
+                    ArithmeticSource::C => self.regs.c = new_value,
+                    ArithmeticSource::D => self.regs.d = new_value,
+                    ArithmeticSource::E => self.regs.e = new_value,
+                    ArithmeticSource::H => self.regs.h = new_value,
+                    ArithmeticSource::L => self.regs.l = new_value,
+                    _ => panic!(),
+                };
+
+                self.regs.f.zero = new_value == 0;
+                self.regs.f.subtract = false;
+                self.regs.f.half_carry = false;
+
+                (self.pc.wrapping_add(2), 8)
+            }
+
+            Instructions::SWAP(source) => {
+                if source == ArithmeticSource::HLAddr {
+                    let mut value = self.bus.read_byte(self.regs.get_hl());
+                    value = ((value & 0xF) << 4) | ((value & 0xF0) >> 4);
+                    self.bus.write_byte(self.regs.get_hl(), value);
+                    self.regs.f.zero = value == 0;
+                    self.regs.f.carry = false;
+                    self.regs.f.subtract = false;
+                    self.regs.f.half_carry = false;
+                    return (self.pc.wrapping_add(2), 16);
+                }
+
+                let reg: &u8 = match source {
+                    ArithmeticSource::A => &self.regs.a,
+                    ArithmeticSource::B => &self.regs.b,
+                    ArithmeticSource::C => &self.regs.c,
+                    ArithmeticSource::D => &self.regs.d,
+                    ArithmeticSource::E => &self.regs.e,
+                    ArithmeticSource::H => &self.regs.h,
+                    ArithmeticSource::L => &self.regs.l,
+                    _ => panic!(),
+                };
+
+                let new_value = ((*reg & 0xF) << 4) | ((*reg & 0xF0) >> 4);
+
+                match source {
+                    ArithmeticSource::A => self.regs.a = new_value,
+                    ArithmeticSource::B => self.regs.b = new_value,
+                    ArithmeticSource::C => self.regs.c = new_value,
+                    ArithmeticSource::D => self.regs.d = new_value,
+                    ArithmeticSource::E => self.regs.e = new_value,
+                    ArithmeticSource::H => self.regs.h = new_value,
+                    ArithmeticSource::L => self.regs.l = new_value,
+                    _ => panic!(),
+                };
+
+                self.regs.f.zero = new_value == 0;
+                self.regs.f.carry = false;
+                self.regs.f.subtract = false;
+                self.regs.f.half_carry = false;
+
+                (self.pc.wrapping_add(2), 8)
+            }
+
+            Instructions::SRL(source) => {
+                if source == ArithmeticSource::HLAddr {
+                    let mut value = self.bus.read_byte(self.regs.get_hl());
+                    self.regs.f.carry = value & 0x01 != 0;
+                    value >>= 1;
+                    self.bus.write_byte(self.regs.get_hl(), value);
+                    self.regs.f.zero = value == 0;
+                    self.regs.f.subtract = false;
+                    self.regs.f.half_carry = false;
+                    return (self.pc.wrapping_add(2), 16);
+                }
+
+                let reg: &u8 = match source {
+                    ArithmeticSource::A => &self.regs.a,
+                    ArithmeticSource::B => &self.regs.b,
+                    ArithmeticSource::C => &self.regs.c,
+                    ArithmeticSource::D => &self.regs.d,
+                    ArithmeticSource::E => &self.regs.e,
+                    ArithmeticSource::H => &self.regs.h,
+                    ArithmeticSource::L => &self.regs.l,
+                    _ => panic!(),
+                };
+
+                self.regs.f.carry = *reg & 0x01 != 0;
+                let new_value = *reg >> 1;
+
+                match source {
+                    ArithmeticSource::A => self.regs.a = new_value,
+                    ArithmeticSource::B => self.regs.b = new_value,
+                    ArithmeticSource::C => self.regs.c = new_value,
+                    ArithmeticSource::D => self.regs.d = new_value,
+                    ArithmeticSource::E => self.regs.e = new_value,
+                    ArithmeticSource::H => self.regs.h = new_value,
+                    ArithmeticSource::L => self.regs.l = new_value,
+                    _ => panic!(),
+                };
+
+                self.regs.f.zero = new_value == 0;
+                self.regs.f.subtract = false;
+                self.regs.f.half_carry = false;
+
+                (self.pc.wrapping_add(2), 8)
+            }
+
+            Instructions::BIT(target, source) => {
+                let value = 1 << target;
+
+                let zero: bool = match source {
+                    ArithmeticSource::A => !(self.regs.a & value) != 0,
+                    ArithmeticSource::B => !(self.regs.b & value) != 0,
+                    ArithmeticSource::C => !(self.regs.c & value) != 0,
+                    ArithmeticSource::D => !(self.regs.d & value) != 0,
+                    ArithmeticSource::E => !(self.regs.e & value) != 0,
+                    ArithmeticSource::H => !(self.regs.h & value) != 0,
+                    ArithmeticSource::L => !(self.regs.l & value) != 0,
+                    ArithmeticSource::HLAddr => {
+                        !(self.bus.read_byte(self.regs.get_hl()) & value) != 0
+                    }
+                    _ => panic!(),
+                };
+
+                self.regs.f.zero = zero;
+                self.regs.f.subtract = false;
+                self.regs.f.half_carry = true;
+
+                if source == ArithmeticSource::HLAddr {
+                    (self.pc.wrapping_add(2), 16)
+                } else {
+                    (self.pc.wrapping_add(2), 8)
+                }
+            }
+
+            Instructions::RES(target, source) => {
+                let value = 1 << target;
+
+                match source {
+                    ArithmeticSource::A => self.regs.a &= !value,
+                    ArithmeticSource::B => self.regs.b &= !value,
+                    ArithmeticSource::C => self.regs.c &= !value,
+                    ArithmeticSource::D => self.regs.d &= !value,
+                    ArithmeticSource::E => self.regs.e &= !value,
+                    ArithmeticSource::H => self.regs.h &= !value,
+                    ArithmeticSource::L => self.regs.l &= !value,
+                    ArithmeticSource::HLAddr => self.bus.write_byte(
+                        self.regs.get_hl(),
+                        self.bus.read_byte(self.regs.get_hl()) & !value,
+                    ),
+                    _ => panic!(),
+                }
+
+                if source == ArithmeticSource::HLAddr {
+                    (self.pc.wrapping_add(2), 16)
+                } else {
+                    (self.pc.wrapping_add(2), 8)
+                }
+            }
+
+            Instructions::SET(target, source) => {
+                let value = 1 << target;
+
+                match source {
+                    ArithmeticSource::A => self.regs.a |= value,
+                    ArithmeticSource::B => self.regs.b |= value,
+                    ArithmeticSource::C => self.regs.c |= value,
+                    ArithmeticSource::D => self.regs.d |= value,
+                    ArithmeticSource::E => self.regs.e |= value,
+                    ArithmeticSource::H => self.regs.h |= value,
+                    ArithmeticSource::L => self.regs.l |= value,
+                    ArithmeticSource::HLAddr => self.bus.write_byte(
+                        self.regs.get_hl(),
+                        self.bus.read_byte(self.regs.get_hl()) | value,
+                    ),
+                    _ => panic!(),
+                }
+
+                if source == ArithmeticSource::HLAddr {
+                    (self.pc.wrapping_add(2), 16)
+                } else {
+                    (self.pc.wrapping_add(2), 8)
                 }
             }
 
@@ -1670,8 +2950,9 @@ impl CPU {
                 }
 
                 match source {
-                    ArithmeticSource::U8 => self.pc.wrapping_add(2),
-                    _ => self.pc.wrapping_add(1),
+                    ArithmeticSource::U8 => (self.pc.wrapping_add(2), 8),
+                    ArithmeticSource::HLAddr => (self.pc.wrapping_add(1), 8),
+                    _ => (self.pc.wrapping_add(1), 4),
                 }
             }
 
@@ -1710,8 +2991,9 @@ impl CPU {
                 }
 
                 match source {
-                    ArithmeticSource::U8 => self.pc.wrapping_add(2),
-                    _ => self.pc.wrapping_add(1),
+                    ArithmeticSource::U8 => (self.pc.wrapping_add(2), 8),
+                    ArithmeticSource::HLAddr => (self.pc.wrapping_add(1), 8),
+                    _ => (self.pc.wrapping_add(1), 4),
                 }
             }
 
@@ -1728,12 +3010,13 @@ impl CPU {
                 self.regs.f.half_carry = (sum & 0xFFF) < (self.regs.get_hl() & 0xFFF);
                 self.regs.f.carry = did_overflow;
                 self.regs.set_hl(sum);
-                self.pc.wrapping_add(1)
+                (self.pc.wrapping_add(1), 8)
             }
 
             Instructions::ADD(target, source) => {
                 match source {
                     ArithmeticSource::I8 => {
+                        /* ADD SP, r8 */
                         let source_value = self.read_next_byte();
                         let sp_value = self.sp;
                         let (new_value, _) = (sp_value as i32).overflowing_add(source_value as i32);
@@ -1743,7 +3026,7 @@ impl CPU {
                         self.regs.f.half_carry =
                             (self.sp & 0xF) + (source_value as u16 & 0xF) > 0xF;
                         self.sp = new_value as u16;
-                        return self.pc.wrapping_add(2);
+                        return (self.pc.wrapping_add(2), 16);
                     }
                     _ => { /* Keep going */ }
                 }
@@ -1758,7 +3041,7 @@ impl CPU {
                     ArithmeticSource::L => self.regs.l,
                     ArithmeticSource::HLAddr => self.bus.read_byte(self.regs.get_hl()),
                     ArithmeticSource::U8 => self.read_next_byte(),
-                    _ => 0,
+                    _ => panic!("Error"),
                 };
 
                 match target {
@@ -1766,29 +3049,33 @@ impl CPU {
                         /* ADD A, r8 */
                         let new_value = self.add(source_value);
                         self.regs.a = new_value;
-                        return self.pc.wrapping_add(1);
+                        match source {
+                            ArithmeticSource::U8 => (self.pc.wrapping_add(2), 8),
+                            ArithmeticSource::HLAddr => (self.pc.wrapping_add(1), 8),
+                            _ => (self.pc.wrapping_add(1), 4),
+                        }
                     }
 
-                    _ => 0,
+                    _ => panic!("Error"),
                 }
             }
         }
     }
 
     fn inc(&mut self, register: &u8) -> u8 {
-        let new_value = *register + 1;
+        let new_value = *register as i16 + 1;
         self.regs.f.zero = new_value == 0;
         self.regs.f.subtract = false;
         self.regs.f.half_carry = *register & 0xF == 0xF;
-        new_value
+        new_value as u8
     }
 
     fn dec(&mut self, register: &u8) -> u8 {
-        let new_value = *register - 1;
+        let new_value = *register as i16 - 1;
         self.regs.f.zero = new_value == 0;
         self.regs.f.subtract = true;
         self.regs.f.half_carry = new_value & 0xF == 0xF;
-        new_value
+        new_value as u8
     }
 
     fn sub(&mut self, value: u8) -> u8 {
@@ -1809,22 +3096,22 @@ impl CPU {
         new_value
     }
 
-    fn jump(&self, should_jump: bool) -> u16 {
+    fn jump(&self, should_jump: bool) -> (u16, u8) {
         if should_jump {
             let lower_byte = self.bus.read_byte(self.pc + 1) as u16;
             let higher_byte = self.bus.read_byte(self.pc + 2) as u16;
-            (higher_byte << 8) | lower_byte
+            ((higher_byte << 8) | lower_byte, 16)
         } else {
-            self.pc.wrapping_add(3)
+            (self.pc.wrapping_add(3), 12)
         }
     }
 
-    fn jump_relative(&self, should_jump: bool) -> u16 {
+    fn jump_relative(&self, should_jump: bool) -> (u16, u8) {
         if should_jump {
             let byte = self.bus.read_byte(self.pc + 1) as i8;
-            ((self.pc as u32 as i32) + (byte as i32)) as u16
+            (((self.pc as u32 as i32) + (byte as i32)) as u16, 12)
         } else {
-            self.pc.wrapping_add(2)
+            (self.pc.wrapping_add(2), 8)
         }
     }
 
@@ -1844,21 +3131,22 @@ impl CPU {
         return (msb << 8) | lsb;
     }
 
-    fn call(&mut self, should_jump: bool) -> u16 {
+    fn call(&mut self, should_jump: bool) -> (u16, u8) {
         let next_pc = self.pc.wrapping_add(3);
 
         if should_jump {
             self.push(next_pc);
-            self.read_next_word()
+            (self.read_next_word(), 24)
         } else {
-            return next_pc;
+            (next_pc, 12)
         }
     }
-    fn return_(&mut self, should_jump: bool) -> u16 {
+
+    fn return_(&mut self, should_jump: bool) -> (u16, u8) {
         if should_jump {
-            self.pop()
+            (self.pop(), 20)
         } else {
-            self.pc.wrapping_add(1)
+            (self.pc.wrapping_add(1), 8)
         }
     }
 

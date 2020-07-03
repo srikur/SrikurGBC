@@ -8,3 +8,5 @@ edition = "2018"
 
 [dependencies]
 sdl2 = "0.34"
+arrayref = "0.3.6"
+gl = "0.10.0"
