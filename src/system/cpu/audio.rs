@@ -10,9 +10,5 @@ impl APU {
         }
     }
 
-    pub fn write_byte(&mut self, address: usize, value: u8) {
-        match address {
-            _ => println!("Audio is not implemented! for {}", value),
-        }
-    }
+    pub fn write_byte(&mut self, _address: usize, _value: u8) {}
 }

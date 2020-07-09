@@ -13,7 +13,7 @@ impl Keys {
         if res & 0x10 == 0 {
             let top = (self.joypad_state >> 4) | 0xF0;
             res &= top;
-        } else if res & 0x20 == 0{
+        } else if res & 0x20 == 0 {
             let bot = (self.joypad_state & 0xF) | 0xF0;
             res &= bot;
         }

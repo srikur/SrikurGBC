@@ -1,5 +1,5 @@
 pub const WRAM_BEGIN: usize = 0xC000;
-pub const WRAM_END: usize = 0xFDFF;
+pub const WRAM_END: usize = 0xDFFF;
 pub const ERAM_BEGIN: usize = 0xA000;
 pub const ERAM_END: usize = 0xBFFF;
 pub const ZRAM_BEGIN: usize = 0xFF80;
