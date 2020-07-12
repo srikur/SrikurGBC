@@ -10,7 +10,7 @@ pub const EXTRA_SPACE_END: usize = 0xFF3F;
 
 #[derive(Copy, Clone)]
 pub enum TilePixelValue {
-    Zero = 0,
+    Zero,
     One,
     Two,
     Three,
@@ -21,6 +21,71 @@ pub fn empty_tile() -> Tile {
     [[TilePixelValue::Zero; 8]; 8]
 }
 
+pub struct Lcdc {
+    pub data: u8,
+}
+
+struct SpriteAttributes {
+    priority: bool,
+    yflip: bool,
+    xflip: bool,
+    palette_number_0: usize,
+}
+
+impl From<u8> for SpriteAttributes {
+    fn from(uint: u8) -> Self {
+        Self {
+            priority: uint & (1 << 7) != 0,
+            yflip: uint & (1 << 6) != 0,
+            xflip: uint & (1 << 5) != 0,
+            palette_number_0: uint as usize & (1 << 4),
+        }
+    }
+}
+
+impl Lcdc {
+    // LCD Display Enable
+    pub fn bit7(&self) -> bool {
+        self.data & 0x80 != 0
+    }
+
+    // Window Tile Map Data Select
+    pub fn bit6(&self) -> bool {
+        self.data & 0x40 != 0
+    }
+
+    // Window Display Enable
+    pub fn bit5(&self) -> bool {
+        self.data & 0x20 != 0
+    }
+
+    // BG & Window Tile Data Select
+    pub fn bit4(&self) -> bool {
+        self.data & 0x10 != 0
+    }
+
+    // BG Tile Map Data Select
+    pub fn bit3(&self) -> bool {
+        self.data & 0x08 != 0
+    }
+
+    // OBJ Size
+    pub fn bit2(&self) -> bool {
+        self.data & 0x04 != 0
+    }
+
+    // OBJ Display Enable
+    pub fn bit1(&self) -> bool {
+        self.data & 0x02 != 0
+    }
+
+    // BG/Window Display/Priority
+    pub fn bit0(&self) -> bool {
+        self.data & 0x01 != 0
+    }
+
+}
+
 pub struct GPU {
     pub vram: [u8; VRAM_SIZE],
 
@@ -28,23 +93,19 @@ pub struct GPU {
     pub tile_set: [Tile; 384],
 
     /* Pixels for OpenGL */
-    pub screen_data: [[[u8; 1]; 160]; 144],
+    pub screen_data: [[[u8; 3]; 160]; 144],
 
     pub oam: [u8; 0xA0],
     pub lyc: u8, // 0xFF45
+
+    /* Sprite Priority */
+    priority: [(bool, usize); 160],
 
     // Extra Space??
     pub extra: [u8; 0x3F],
 
     /* LCD Control Register 0xFF40 */
-    pub lcd_enabled: bool,                   // Bit 7
-    pub window_tilemap_display_select: bool, // Bit 6
-    pub window_display_enable: bool,         // Bit 5
-    pub bg_window_tile_data_select: bool,    // Bit 4
-    pub bg_tile_map_display_select: bool,    // Bit 3
-    pub obj_size: bool,                      // Bit 2
-    pub obj_display_enable: bool,            // Bit 1
-    pub bg_window_display_priority: bool,    // Bit 0
+    pub lcdc: Lcdc,
 
     pub stat: u8,         // 0xFF41
     pub current_line: u8, // 0xFF44
@@ -64,197 +125,180 @@ pub struct GPU {
 }
 
 impl GPU {
+
+    pub fn new() -> Self {
+        GPU {
+            tile_set: [empty_tile(); 384],
+            screen_data: [[[0xFFu8; 3]; 160]; 144],
+            vram: [0; VRAM_SIZE],
+            oam: [0; 0xA0],
+            stat: 0,
+            extra: [0; 0x3F],
+            bg_palette: 0,
+            obp0_palette: 0,
+            obp1_palette: 0,
+            lcdc: Lcdc {
+                data: 0,
+            },
+            priority: [(true, 0); 160],
+            scroll_x: 0,
+            scroll_y: 0,
+            lyc: 0,
+            window_x: 0,
+            window_y: 0,
+            current_line: 0,
+            scanline_counter: 456,
+        }
+    }
+
     pub fn draw_scanline(&mut self) {
-        if self.bg_window_display_priority {
+        if self.lcdc.bit0() {
             self.render_tiles();
         }
 
-        if self.obj_display_enable {
+        if self.lcdc.bit1() {
             self.render_sprites();
         }
     }
 
     fn render_sprites(&mut self) {
-        if !self.obj_display_enable {
-            return;
-        }
+        let sprite_size = if self.lcdc.bit2() { 16 } else { 0 };
 
-        for sprite in 0..=39 {
-            let y_pos: u8 = (self.oam[sprite * 4] as i16 - 16) as u8;
-            let x_pos: u8 = (self.oam[sprite * 4 + 1] as i16 - 8) as u8;
-            let tile_location: u8 = self.oam[sprite * 4 + 2];
-            let attributes: u8 = self.oam[sprite * 4 + 3];
-            let x_flip: bool = attributes & 0x40 != 0;
-            let y_flip: bool = attributes & 0x20 != 0;
-            let y_size = if self.obj_size { 16 } else { 8 };
+        for sprite in 0..40 {
+            let sprite_address = (sprite as u16) * 4;
+            let x_pos = self.oam[sprite_address as usize].wrapping_sub(16);
+            let y_pos = self.oam[sprite_address as usize + 1].wrapping_sub(8);
+            let tile_number = self.oam[sprite_address as usize + 2] & if self.lcdc.bit2() { 0xFE } else { 0xFF };
+            let tile_attribute = SpriteAttributes::from(self.oam[sprite_address as usize + 3]);
 
-            if (self.current_line >= y_pos) && (self.current_line < (y_pos + y_size)) {
-                let mut line: i32 = i32::from(self.current_line - y_pos);
-                if y_flip {
-                    line -= y_size as i32;
-                    line *= -1;
+            if y_pos <= 0xFF - sprite_size + 1 {
+                if self.current_line < y_pos || self.current_line > y_pos + sprite_size - 1 {
+                    continue;
                 }
-                line *= 2;
+            } else {
+                if self.current_line > y_pos.wrapping_add(sprite_size) - 1 {
+                    continue;
+                }
+            }
+            if x_pos >= (160 as u8) && x_pos <= (0xff - 7) {
+                continue;
+            }
 
-                let data1: u8 = self.vram[i32::from(tile_location as i32 * 16 + line) as usize];
-                let data2: u8 = self.vram[i32::from(tile_location as i32 * 16 + line + 1) as usize];
+            let tile_y = if tile_attribute.yflip {
+                sprite_size - 1 - self.current_line.wrapping_sub(y_pos)
+            } else {
+                self.current_line.wrapping_sub(y_pos)
+            };
+            let tile_y_addr = u16::from(tile_number) * 16 + u16::from(tile_y) * 2;
+            let tile_y_data: [u8; 2] = {
+                let b1 = self.vram[tile_y_addr as usize];
+                let b2 = self.vram[tile_y_addr as usize + 1];
+                [b1, b2]
+            };
 
-                for tile_pixel in 7..=0 {
-                    let mut color_bit: i32 = tile_pixel;
-                    if x_flip {
-                        color_bit -= 7;
-                        color_bit *= -1;
+            for pixel in 0..8 {
+                if x_pos.wrapping_add(pixel) >= (160 as u8) {
+                    continue;
+                }
+                let tile_x = if tile_attribute.xflip { 7 - pixel } else { pixel };
+
+                let color_l = if tile_y_data[0] & (0x80 >> tile_x) != 0 { 1 } else { 0 };
+                let color_h = if tile_y_data[1] & (0x80 >> tile_x) != 0 { 2 } else { 0 };
+                let color = color_h | color_l;
+                if color == 0 {
+                    continue;
+                }
+
+                let prio = self.priority[x_pos.wrapping_add(pixel) as usize];
+                let skip = if prio.0 {
+                    prio.1 != 0
+                } else {
+                    tile_attribute.priority && prio.1 != 0
+                };
+                if skip {
+                    continue;
+                }
+
+                let color = if tile_attribute.palette_number_0 == 1 {
+                    match self.obp1_palette >> (2 * color) & 0x03 {
+                        0x00 => 255,
+                        0x01 => 192,
+                        0x02 => 96,
+                        _ => 0,
                     }
-
-                    let mut color_num: i32 = if (data2 & (1 << color_bit)) != 0 {
-                        1
-                    } else {
-                        0
-                    };
-                    let bit1 = if (data1 & (1 << color_bit)) != 0 {
-                        1
-                    } else {
-                        0
-                    };
-                    color_num = (color_num << 1) | bit1;
-
-                    let color = self.determine_color(
-                        color_num,
-                        if attributes & 0x10 != 0 {
-                            self.obp1_palette
-                        } else {
-                            self.obp0_palette
-                        },
-                    );
-                    let pix = x_pos + 7 - tile_pixel as u8;
-
-                    self.screen_data[self.current_line as usize][pix as usize][0] = color;
-                }
+                } else {
+                    match self.obp0_palette >> (2 * color) & 0x03 {
+                        0x00 => 255,
+                        0x01 => 192,
+                        0x02 => 96,
+                        _ => 0,
+                    }
+                };
+                self.screen_data[self.scanline_counter as usize][x_pos.wrapping_add(pixel) as usize] = [color, color, color];
             }
         }
     }
 
     fn render_tiles(&mut self) {
-        let mut tile_data: u16 = 0x0000;
-        let scroll_y = self.scroll_y;
-        let scroll_x = self.scroll_x;
-        let window_y = self.window_y;
-        let current_line = self.current_line;
+        let using_window = self.lcdc.bit5() && (self.window_y <= self.current_line);
+        let tile_data: u16 = if self.lcdc.bit4() { 0x8000 } else { 0x8800 };
         let window_x = self.window_x.wrapping_sub(7);
-        let mut unsigned: bool = true;
-        let using_window = self.window_display_enable && (self.window_y <= self.current_line);
-
-        if !self.bg_window_tile_data_select {
-            tile_data = 0x800;
-            unsigned = false;
-        }
-
-        let background_memory: u16 = if !using_window {
-            if self.bg_tile_map_display_select {
-                0x1C00
-            } else {
-                0x1800
-            }
-        } else {
-            if self.window_tilemap_display_select {
-                0x1C00
-            } else {
-                0x1800
-            }
-        };
 
         let y_pos: u8 = if !using_window {
-            scroll_y.wrapping_add(self.scanline_counter as u8)
+            self.scroll_y.wrapping_add(self.current_line as u8)
         } else {
-            current_line.wrapping_sub(window_y)
+            self.current_line.wrapping_sub(self.window_y)
         };
+        let tile_row = (u16::from(y_pos) >> 3) & 0x1F;
 
-        let tile_row = u16::from((y_pos / 8).wrapping_mul(32));
-
-        for pixel in 0..=159 {
-            let mut x_pos = pixel + scroll_x;
-
-            if using_window && (pixel >= window_x) {
-                x_pos = pixel - window_x;
-            }
-
-            let tile_col: u16 = (x_pos / 8) as u16;
-            let tile_num: i16;
-
-            let tile_address = background_memory + tile_row + tile_col;
-            if unsigned {
-                tile_num = i16::from(self.vram[tile_address as usize]); // this may be causing problems
+        for pixel in 0..160 {
+            let x_pos = if using_window && pixel as u8 >= window_x {
+                pixel as u8 - window_x
             } else {
-                tile_num = i16::from(self.vram[tile_address as usize]);
-            }
-
-            let mut tile_location = tile_data;
-            if unsigned {
-                tile_location += (tile_num as u16).wrapping_mul(16);
-            } else {
-                tile_location += ((tile_num + 128) as u16).wrapping_mul(16);
-            }
-
-            let line = (y_pos % 8).wrapping_mul(2);
-            let data1 = self.vram[(tile_location + line as u16) as usize];
-            let data2 = self.vram[(tile_location + 1 + line as u16) as usize];
-
-            let color_bit: i32 = ((x_pos as i32 % 8) - 7) * -1;
-            let mut color_num: i32 = if (data2 & (1 << color_bit)) != 0 {
-                1
-            } else {
-                0
+                self.scroll_x.wrapping_add(pixel as u8)
             };
-            let bit1 = if (data1 & (1 << color_bit)) != 0 {
-                1
+            let tile_col = (u16::from(x_pos) >> 3) & 0x1F;
+
+            let background_memory: u16 = if using_window && pixel as u8 >= window_x {
+                if self.lcdc.bit6() {
+                    0x9c00
+                } else {
+                    0x9800
+                }
+            } else if self.lcdc.bit3() {
+                0x9c00
             } else {
-                0
+                0x9800
             };
-            color_num = (color_num << 1) | bit1;
 
-            let color = self.determine_color(color_num, self.bg_palette);
+            let tile_address = background_memory + (tile_row * 32) + tile_col;
+            let tile_number = self.vram[tile_address as usize - 0x8000];
+            let mut tile_offset = if self.lcdc.bit4() {
+                i16::from(tile_number)
+            } else {
+                i16::from(tile_number as i8) + 128
+            } as u16;
+            tile_offset *= 16;
+            let tile_location = tile_data + tile_offset;
+            let tile_y = y_pos % 8; 
+            let tile_y_data: [u8; 2] = {
+                let a = self.vram[(tile_location + u16::from(tile_y * 2)) as usize - 0x8000];
+                let b = self.vram[(tile_location + u16::from(tile_y * 2) + 1) as usize - 0x8000];
+                [a, b]
+            };
+            let tile_x = x_pos % 8;
 
-            if (current_line > 143) || (pixel > 159) {
-                panic!("Something went wrong in render_tiles()");
-            }
+            let color_low = if tile_y_data[0] & (0x80 >> tile_x) != 0 { 1 } else { 0 };
+            let color_high = if tile_y_data[1] & (0x80 >> tile_x) != 0 { 2 } else { 0 };
 
-            self.screen_data[current_line as usize][pixel as usize][0] = color;
-        }
-    }
-
-    fn determine_color(&mut self, color_num: i32, value: u8) -> u8 {
-        let high: u8;
-        let low: u8;
-
-        match color_num {
-            0 => {
-                high = 1;
-                low = 0;
-            }
-            1 => {
-                high = 3;
-                low = 2;
-            }
-            2 => {
-                high = 5;
-                low = 4;
-            }
-            3 => {
-                high = 7;
-                low = 6;
-            }
-            _ => panic!(),
-        }
-
-        let mut color = if (value & (1 << high)) != 0 { 1 } else { 0 };
-        color |= if (value & (1 << low)) != 0 { 1 } else { 0 };
-
-        match color {
-            0 => 255,
-            1 => 204,
-            2 => 119,
-            3 => 0,
-            _ => panic!(),
+            let color = color_high | color_low;
+            let color = match self.bg_palette >> (2 * color) & 0x03 {
+                0x00 => 255,
+                0x01 => 192,
+                0x02 => 96,
+                _ => 0,
+            };
+            self.screen_data[self.current_line as usize][pixel] = [color, color, color];
         }
     }
 
@@ -264,64 +308,12 @@ impl GPU {
 
     pub fn write_vram(&mut self, index: usize, value: u8) {
         self.vram[index] = value;
-
-        // Update Tile Arrays
-        if index >= 0x1800 {
-            return;
-        }
-
-        let normalized_index = index & 0xFFFE;
-        let byte1 = self.vram[normalized_index];
-        let byte2 = self.vram[normalized_index + 1];
-        let tile_index = index / 16;
-        let row_index = (index % 16) / 2;
-
-        for pixel_index in 0..8 {
-            let mask = 1 << (7 - pixel_index);
-            let low = byte1 & mask;
-            let high = byte2 & mask;
-
-            let value = match (low != 0, high != 0) {
-                (true, true) => TilePixelValue::Three,
-                (false, true) => TilePixelValue::Two,
-                (true, false) => TilePixelValue::One,
-                (false, false) => TilePixelValue::Zero,
-            };
-
-            self.tile_set[tile_index][row_index][pixel_index] = value;
-        }
     }
 
     pub fn read_registers(&self, address: usize) -> u8 {
         match address {
             /* LCD Control */
-            0xFF40 => {
-                //return lcd control
-                (if self.lcd_enabled { 1 } else { 0 }) << 7
-                    | (if self.window_tilemap_display_select {
-                        1
-                    } else {
-                        0
-                    }) << 6
-                    | (if self.window_display_enable { 1 } else { 0 }) << 5
-                    | (if self.bg_window_tile_data_select {
-                        1
-                    } else {
-                        0
-                    }) << 4
-                    | (if self.bg_tile_map_display_select {
-                        1
-                    } else {
-                        0
-                    }) << 3
-                    | (if self.obj_size { 1 } else { 0 }) << 2
-                    | (if self.obj_display_enable { 1 } else { 0 }) << 1
-                    | (if self.bg_window_display_priority {
-                        1
-                    } else {
-                        0
-                    })
-            }
+            0xFF40 => self.lcdc.data,   
 
             /* Scroll Y */
             0xFF42 => self.scroll_y,
@@ -342,17 +334,7 @@ impl GPU {
     pub fn write_registers(&mut self, address: usize, value: u8) {
         match address {
             /* LCD Control */
-            0xFF40 => {
-                // set lcd control
-                self.lcd_enabled = value & 0x80 != 0;
-                self.window_tilemap_display_select = value & 0x40 != 0;
-                self.window_display_enable = value & 0x20 != 0;
-                self.bg_window_tile_data_select = value & 0x10 != 0;
-                self.bg_tile_map_display_select = value & 0x08 != 0;
-                self.obj_size = value & 0x04 != 0;
-                self.obj_display_enable = value & 0x02 != 0;
-                self.bg_window_display_priority = value & 0x01 != 0;
-            }
+            0xFF40 => self.lcdc.data = value,
 
             /* STAT */
             0xFF41 => self.stat = value,

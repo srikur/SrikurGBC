@@ -34,74 +34,39 @@ pub struct FlagsRegister {
 }
 
 #[derive(PartialEq)]
+#[rustfmt::skip]
 enum LoadByteTarget {
-    A,
-    B,
-    C,
-    D,
-    E,
-    H,
-    L,
-    HLI,
-    HLD,
-    HL,
-    BC,
-    DE,
-    A16,
+    A, B, C, D, E, H, L, HLI, HLD, HL, BC, DE, A16,
 }
 
 #[derive(PartialEq)]
+#[rustfmt::skip]
 enum LoadByteSource {
-    A,
-    B,
-    C,
-    D,
-    E,
-    H,
-    L,
-    D8,
-    HL,
-    HLI,
-    HLD,
-    A16,
-    BC,
-    DE,
+    A, B, C, D, E, H, L, D8, HL, HLI, HLD, A16, BC, DE,
 }
 
+#[rustfmt::skip]
 enum LoadWordSource {
-    D16,
-    HL,
-    SP,
-    SPr8,
+    D16, HL, SP, SPr8,
 }
 
+#[rustfmt::skip]
 enum LoadWordTarget {
-    BC,
-    DE,
-    HL,
-    SP,
-    A16,
+    BC, DE, HL, SP, A16,
 }
 
 #[derive(PartialEq)]
 enum LoadOtherTarget {
-    A,
-    A8,
-    CAddress,
+    A, A8, CAddress,
 }
 
 #[derive(PartialEq)]
 enum LoadOtherSource {
-    A,
-    A8,
-    CAddress,
+    A, A8, CAddress,
 }
 
 enum StackTarget {
-    BC,
-    DE,
-    HL,
-    AF,
+    BC, DE, HL, AF,
 }
 
 enum LoadType {
@@ -160,56 +125,30 @@ enum Instructions {
     SET(u8, ArithmeticSource),
 }
 
+#[rustfmt::skip]
 enum RSTTargets {
-    H00,
-    H10,
-    H20,
-    H30,
-    H08,
-    H18,
-    H28,
-    H38,
+    H00, H10, H20, H30, H08, H18, H28, H38,
 }
 
+#[rustfmt::skip]
 enum IncDecTarget {
-    A,
-    B,
-    C,
-    D,
-    E,
-    H,
-    L,
-    HL,
-    HLAddr,
-    BC,
-    DE,
-    SP,
+    A, B, C, D, E, H, L, HL, HLAddr, BC, DE, SP,
 }
 
+#[rustfmt::skip]
 enum Arithmetic16Target {
-    HL,
-    BC,
-    DE,
-    SP,
+    HL, BC, DE, SP,
 }
 
+#[rustfmt::skip]
 enum ArithmeticTarget {
-    A,
-    SP,
+    A, SP,
 }
 
+#[rustfmt::skip]
 #[derive(Eq, PartialEq)]
 enum ArithmeticSource {
-    A,
-    B,
-    C,
-    D,
-    E,
-    H,
-    L,
-    U8,
-    HLAddr,
-    I8,
+    A, B, C, D, E, H, L, U8, HLAddr, I8,
 }
 
 #[derive(PartialEq)]
@@ -781,262 +720,104 @@ impl Instructions {
         }
     }
 
+    #[rustfmt::skip]
     fn from_byte_not_prefixed(byte: u8) -> Option<Instructions> {
         match byte {
             0x00 => Some(Instructions::NOP()),
-            0x01 => Some(Instructions::LD(LoadType::Word(
-                LoadWordTarget::BC,
-                LoadWordSource::D16,
-            ))),
-            0x02 => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::BC,
-                LoadByteSource::A,
-            ))),
+            0x01 => Some(Instructions::LD(LoadType::Word(LoadWordTarget::BC,LoadWordSource::D16,))),
+            0x02 => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::BC,LoadByteSource::A,))),
             0x03 => Some(Instructions::INC(IncDecTarget::BC)),
             0x04 => Some(Instructions::INC(IncDecTarget::B)),
             0x05 => Some(Instructions::DEC(IncDecTarget::B)),
-            0x06 => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::B,
-                LoadByteSource::D8,
-            ))),
+            0x06 => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::B,LoadByteSource::D8,))),
             0x07 => Some(Instructions::RLCA()),
-            0x08 => Some(Instructions::LD(LoadType::Word(
-                LoadWordTarget::A16,
-                LoadWordSource::SP,
-            ))),
+            0x08 => Some(Instructions::LD(LoadType::Word(LoadWordTarget::A16,LoadWordSource::SP,))),
             0x09 => Some(Instructions::ADD16(Arithmetic16Target::BC)),
-            0x0A => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::A,
-                LoadByteSource::BC,
-            ))),
+            0x0A => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::A,LoadByteSource::BC,))),
             0x0B => Some(Instructions::DEC(IncDecTarget::BC)),
             0x0C => Some(Instructions::INC(IncDecTarget::C)),
             0x0D => Some(Instructions::DEC(IncDecTarget::C)),
-            0x0E => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::C,
-                LoadByteSource::D8,
-            ))),
+            0x0E => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::C,LoadByteSource::D8,))),
             0x0F => Some(Instructions::RRCA()),
-            0x11 => Some(Instructions::LD(LoadType::Word(
-                LoadWordTarget::DE,
-                LoadWordSource::D16,
-            ))),
-            0x12 => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::DE,
-                LoadByteSource::A,
-            ))),
+            0x11 => Some(Instructions::LD(LoadType::Word(LoadWordTarget::DE,LoadWordSource::D16,))),
+            0x12 => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::DE,LoadByteSource::A,))),
             0x13 => Some(Instructions::INC(IncDecTarget::DE)),
             0x14 => Some(Instructions::INC(IncDecTarget::D)),
             0x15 => Some(Instructions::DEC(IncDecTarget::D)),
-            0x16 => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::D,
-                LoadByteSource::D8,
-            ))),
+            0x16 => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::D,LoadByteSource::D8,))),
             0x17 => Some(Instructions::RLA()),
             0x18 => Some(Instructions::JR(JumpTest::Always)),
             0x19 => Some(Instructions::ADD16(Arithmetic16Target::DE)),
-            0x1A => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::A,
-                LoadByteSource::DE,
-            ))),
+            0x1A => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::A,LoadByteSource::DE,))),
             0x1B => Some(Instructions::DEC(IncDecTarget::DE)),
             0x1C => Some(Instructions::INC(IncDecTarget::E)),
             0x1D => Some(Instructions::DEC(IncDecTarget::E)),
-            0x1E => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::E,
-                LoadByteSource::D8,
-            ))),
+            0x1E => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::E,LoadByteSource::D8,))),
             0x1F => Some(Instructions::RRA()),
             0x20 => Some(Instructions::JR(JumpTest::NotZero)),
-            0x21 => Some(Instructions::LD(LoadType::Word(
-                LoadWordTarget::HL,
-                LoadWordSource::D16,
-            ))),
-            0x22 => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::HLI,
-                LoadByteSource::A,
-            ))),
+            0x21 => Some(Instructions::LD(LoadType::Word(LoadWordTarget::HL,LoadWordSource::D16,))),
+            0x22 => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::HLI,LoadByteSource::A,))),
             0x23 => Some(Instructions::INC(IncDecTarget::HL)),
             0x24 => Some(Instructions::INC(IncDecTarget::H)),
             0x25 => Some(Instructions::DEC(IncDecTarget::H)),
-            0x26 => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::H,
-                LoadByteSource::D8,
-            ))),
+            0x26 => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::H,LoadByteSource::D8,))),
             0x27 => Some(Instructions::DAA()),
             0x28 => Some(Instructions::JR(JumpTest::Zero)),
             0x29 => Some(Instructions::ADD16(Arithmetic16Target::HL)),
-            0x2A => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::A,
-                LoadByteSource::HLI,
-            ))),
+            0x2A => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::A,LoadByteSource::HLI,))),
             0x2B => Some(Instructions::DEC(IncDecTarget::HL)),
             0x2C => Some(Instructions::INC(IncDecTarget::L)),
             0x2D => Some(Instructions::DEC(IncDecTarget::L)),
-            0x2E => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::L,
-                LoadByteSource::D8,
-            ))),
+            0x2E => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::L,LoadByteSource::D8,))),
             0x2F => Some(Instructions::CPL()),
             0x30 => Some(Instructions::JR(JumpTest::NotCarry)),
-            0x31 => Some(Instructions::LD(LoadType::Word(
-                LoadWordTarget::SP,
-                LoadWordSource::D16,
-            ))),
-            0x32 => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::HLD,
-                LoadByteSource::A,
-            ))),
+            0x31 => Some(Instructions::LD(LoadType::Word(LoadWordTarget::SP,LoadWordSource::D16,))),
+            0x32 => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::HLD,LoadByteSource::A,))),
             0x33 => Some(Instructions::INC(IncDecTarget::SP)),
             0x34 => Some(Instructions::INC(IncDecTarget::HLAddr)),
             0x35 => Some(Instructions::DEC(IncDecTarget::HLAddr)),
-            0x36 => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::HL,
-                LoadByteSource::D8,
-            ))),
+            0x36 => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::HL,LoadByteSource::D8,))),
             0x37 => Some(Instructions::SCF()),
             0x38 => Some(Instructions::JR(JumpTest::Carry)),
             0x39 => Some(Instructions::ADD16(Arithmetic16Target::SP)),
-            0x3A => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::A,
-                LoadByteSource::HLD,
-            ))),
+            0x3A => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::A,LoadByteSource::HLD,))),
             0x3B => Some(Instructions::DEC(IncDecTarget::SP)),
             0x3C => Some(Instructions::INC(IncDecTarget::A)),
             0x3D => Some(Instructions::DEC(IncDecTarget::A)),
-            0x3E => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::A,
-                LoadByteSource::D8,
-            ))),
+            0x3E => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::A,LoadByteSource::D8,))),
             0x3F => Some(Instructions::CCF()),
-            0x40 => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::B,
-                LoadByteSource::B,
-            ))),
-            0x41 => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::B,
-                LoadByteSource::C,
-            ))),
-            0x42 => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::B,
-                LoadByteSource::D,
-            ))),
-            0x43 => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::B,
-                LoadByteSource::E,
-            ))),
-            0x44 => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::B,
-                LoadByteSource::H,
-            ))),
-            0x45 => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::B,
-                LoadByteSource::L,
-            ))),
-            0x46 => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::B,
-                LoadByteSource::HL,
-            ))),
-            0x47 => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::B,
-                LoadByteSource::A,
-            ))),
-            0x48 => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::C,
-                LoadByteSource::B,
-            ))),
-            0x49 => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::C,
-                LoadByteSource::C,
-            ))),
-            0x4A => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::C,
-                LoadByteSource::D,
-            ))),
-            0x4B => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::C,
-                LoadByteSource::E,
-            ))),
-            0x4C => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::C,
-                LoadByteSource::H,
-            ))),
-            0x4D => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::C,
-                LoadByteSource::L,
-            ))),
-            0x4E => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::C,
-                LoadByteSource::HL,
-            ))),
-            0x4F => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::C,
-                LoadByteSource::A,
-            ))),
-            0x50 => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::D,
-                LoadByteSource::B,
-            ))),
-            0x51 => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::D,
-                LoadByteSource::C,
-            ))),
-            0x52 => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::D,
-                LoadByteSource::D,
-            ))),
-            0x53 => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::D,
-                LoadByteSource::E,
-            ))),
-            0x54 => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::D,
-                LoadByteSource::H,
-            ))),
-            0x55 => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::D,
-                LoadByteSource::L,
-            ))),
-            0x56 => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::D,
-                LoadByteSource::HL,
-            ))),
-            0x57 => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::D,
-                LoadByteSource::A,
-            ))),
-            0x58 => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::E,
-                LoadByteSource::B,
-            ))),
-            0x59 => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::E,
-                LoadByteSource::C,
-            ))),
-            0x5A => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::E,
-                LoadByteSource::D,
-            ))),
-            0x5B => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::E,
-                LoadByteSource::E,
-            ))),
-            0x5C => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::E,
-                LoadByteSource::H,
-            ))),
-            0x5D => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::E,
-                LoadByteSource::L,
-            ))),
-            0x5E => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::E,
-                LoadByteSource::HL,
-            ))),
-            0x5F => Some(Instructions::LD(LoadType::Byte(
-                LoadByteTarget::E,
-                LoadByteSource::A,
-            ))),
+            0x40 => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::B,LoadByteSource::B,))),
+            0x41 => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::B,LoadByteSource::C,))),
+            0x42 => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::B,LoadByteSource::D,))),
+            0x43 => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::B,LoadByteSource::E,))),
+            0x44 => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::B,LoadByteSource::H,))),
+            0x45 => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::B,LoadByteSource::L,))),
+            0x46 => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::B,LoadByteSource::HL,))),
+            0x47 => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::B,LoadByteSource::A,))),
+            0x48 => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::C,LoadByteSource::B,))),
+            0x49 => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::C,LoadByteSource::C,))),
+            0x4A => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::C,LoadByteSource::D,))),
+            0x4B => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::C,LoadByteSource::E,))),
+            0x4C => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::C,LoadByteSource::H,))),
+            0x4D => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::C,LoadByteSource::L,))),
+            0x4E => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::C,LoadByteSource::HL,))),
+            0x4F => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::C,LoadByteSource::A,))),
+            0x50 => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::D,LoadByteSource::B,))),
+            0x51 => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::D,LoadByteSource::C,))),
+            0x52 => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::D,LoadByteSource::D,))),
+            0x53 => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::D,LoadByteSource::E,))),
+            0x54 => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::D,LoadByteSource::H,))),
+            0x55 => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::D,LoadByteSource::L,))),
+            0x56 => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::D,LoadByteSource::HL,))),
+            0x57 => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::D,LoadByteSource::A,))),
+            0x58 => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::E,LoadByteSource::B,))),
+            0x59 => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::E,LoadByteSource::C,))),
+            0x5A => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::E,LoadByteSource::D,))),
+            0x5B => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::E,LoadByteSource::E,))),
+            0x5C => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::E,LoadByteSource::H,))),
+            0x5D => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::E,LoadByteSource::L,))),
+            0x5E => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::E,LoadByteSource::HL,))),
+            0x5F => Some(Instructions::LD(LoadType::Byte(LoadByteTarget::E,LoadByteSource::A,))),
             0x60 => Some(Instructions::LD(LoadType::Byte(
                 LoadByteTarget::H,
                 LoadByteSource::B,
@@ -1376,32 +1157,7 @@ impl CPU {
                     joypad_state: 0,
                     joypad_register: 0xFF,
                 },
-                gpu: gpu::GPU {
-                    tile_set: [gpu::empty_tile(); 384],
-                    screen_data: [[[0; 1]; 160]; 144],
-                    vram: [0; gpu::VRAM_SIZE],
-                    oam: [0; 0xA0],
-                    stat: 0,
-                    extra: [0; 0x3F],
-                    bg_palette: 0,
-                    obp0_palette: 0,
-                    obp1_palette: 0,
-                    lcd_enabled: false,
-                    window_tilemap_display_select: false, // Bit 6
-                    window_display_enable: false,         // Bit 5
-                    bg_window_tile_data_select: false,    // Bit 4
-                    bg_tile_map_display_select: false,    // Bit 3
-                    obj_size: false,                      // Bit 2
-                    obj_display_enable: false,            // Bit 1
-                    bg_window_display_priority: false,    // Bit 0
-                    scroll_x: 0,
-                    scroll_y: 0,
-                    lyc: 0,
-                    window_x: 0,
-                    window_y: 0,
-                    current_line: 0,
-                    scanline_counter: 456,
-                },
+                gpu: gpu::GPU::new(),
             },
             regs: Registers {
                 a: 0x00,
@@ -1525,7 +1281,7 @@ impl CPU {
     fn update_graphics(&mut self, cycles: u8) {
         self.set_status();
 
-        if self.bus.gpu.lcd_enabled {
+        if self.bus.gpu.lcdc.bit7() {
             self.bus.gpu.scanline_counter -= cycles as i16;
         } else {
             return;
@@ -1544,7 +1300,7 @@ impl CPU {
     }
 
     fn set_status(&mut self) {
-        if !self.bus.gpu.lcd_enabled {
+        if !self.bus.gpu.lcdc.bit7() {
             self.bus.gpu.scanline_counter = 456;
             self.bus.gpu.current_line = 0;
             self.bus.gpu.stat &= 0xFC;
