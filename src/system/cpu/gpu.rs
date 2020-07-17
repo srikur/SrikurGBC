@@ -1,25 +1,12 @@
 pub const VRAM_BEGIN: usize = 0x8000;
 pub const VRAM_END: usize = 0x9FFF;
-pub const VRAM_SIZE: usize = VRAM_END - VRAM_BEGIN + 1;
+pub const VRAM_SIZE: usize = 0x2000;
 pub const GPU_REGS_BEGIN: usize = 0xFF40;
 pub const GPU_REGS_END: usize = 0xFF4B;
 pub const OAM_BEGIN: usize = 0xFE00;
 pub const OAM_END: usize = 0xFE9F;
 pub const EXTRA_SPACE_BEGIN: usize = 0xFF01;
 pub const EXTRA_SPACE_END: usize = 0xFF3F;
-
-#[derive(Copy, Clone)]
-pub enum TilePixelValue {
-    Zero,
-    One,
-    Two,
-    Three,
-}
-
-pub type Tile = [[TilePixelValue; 8]; 8];
-pub fn empty_tile() -> Tile {
-    [[TilePixelValue::Zero; 8]; 8]
-}
 
 pub struct Lcdc {
     pub data: u8,
@@ -86,11 +73,16 @@ impl Lcdc {
 
 }
 
+pub struct Stat {
+    pub enable_ly_interrupt: bool,
+    pub enable_m2_interrupt: bool,
+    pub enable_m1_interrupt: bool,
+    pub enable_m0_interrupt: bool,
+    pub mode: u8,
+}
+
 pub struct GPU {
     pub vram: [u8; VRAM_SIZE],
-
-    /* Tileset */
-    pub tile_set: [Tile; 384],
 
     /* Pixels for OpenGL */
     pub screen_data: [[[u8; 3]; 160]; 144],
@@ -107,7 +99,7 @@ pub struct GPU {
     /* LCD Control Register 0xFF40 */
     pub lcdc: Lcdc,
 
-    pub stat: u8,         // 0xFF41
+    pub stat: Stat,         // 0xFF41
     pub current_line: u8, // 0xFF44
 
     pub window_x: u8, // 0xFF4B
@@ -121,18 +113,23 @@ pub struct GPU {
     /* GPU Registers */
     pub scroll_x: u8, // 0xFF43
     pub scroll_y: u8, // 0xFF42
-    pub scanline_counter: i16,
+    pub scanline_counter: u32,
 }
 
 impl GPU {
 
     pub fn new() -> Self {
         GPU {
-            tile_set: [empty_tile(); 384],
             screen_data: [[[0xFFu8; 3]; 160]; 144],
             vram: [0; VRAM_SIZE],
             oam: [0; 0xA0],
-            stat: 0,
+            stat: Stat {
+                enable_ly_interrupt: false,
+                enable_m2_interrupt: false,
+                enable_m1_interrupt: false,
+                enable_m0_interrupt: false,
+                mode: 0,
+            },
             extra: [0; 0x3F],
             bg_palette: 0,
             obp0_palette: 0,
@@ -162,12 +159,12 @@ impl GPU {
     }
 
     fn render_sprites(&mut self) {
-        let sprite_size = if self.lcdc.bit2() { 16 } else { 0 };
+        let sprite_size = if self.lcdc.bit2() { 16 } else { 8 };
 
         for sprite in 0..40 {
             let sprite_address = (sprite as u16) * 4;
-            let x_pos = self.oam[sprite_address as usize].wrapping_sub(16);
-            let y_pos = self.oam[sprite_address as usize + 1].wrapping_sub(8);
+            let y_pos = self.oam[sprite_address as usize].wrapping_sub(16);
+            let x_pos = self.oam[sprite_address as usize + 1].wrapping_sub(8);
             let tile_number = self.oam[sprite_address as usize + 2] & if self.lcdc.bit2() { 0xFE } else { 0xFF };
             let tile_attribute = SpriteAttributes::from(self.oam[sprite_address as usize + 3]);
 
@@ -180,7 +177,7 @@ impl GPU {
                     continue;
                 }
             }
-            if x_pos >= (160 as u8) && x_pos <= (0xff - 7) {
+            if x_pos >= (160 as u8) && x_pos <= (0xFF - 7) {
                 continue;
             }
 
@@ -234,7 +231,7 @@ impl GPU {
                         _ => 0,
                     }
                 };
-                self.screen_data[self.scanline_counter as usize][x_pos.wrapping_add(pixel) as usize] = [color, color, color];
+                self.screen_data[self.current_line as usize][x_pos.wrapping_add(pixel) as usize] = [color, color, color];
             }
         }
     }
@@ -293,12 +290,12 @@ impl GPU {
 
             let color = color_high | color_low;
             let color = match self.bg_palette >> (2 * color) & 0x03 {
-                0x00 => 255,
-                0x01 => 192,
-                0x02 => 96,
-                _ => 0,
+                0x00 => [192, 222, 169],
+                0x01 => [192,192,192],
+                0x02 => [96,96,96],
+                _ => [0,0,0],
             };
-            self.screen_data[self.current_line as usize][pixel] = [color, color, color];
+            self.screen_data[self.current_line as usize][pixel] = color;
         }
     }
 
@@ -310,10 +307,21 @@ impl GPU {
         self.vram[index] = value;
     }
 
+    #[rustfmt::skip]
     pub fn read_registers(&self, address: usize) -> u8 {
         match address {
             /* LCD Control */
-            0xFF40 => self.lcdc.data,   
+            0xFF40 => self.lcdc.data, 
+            
+            /* STAT */
+            0xFF41 => {
+                let bit6 = if self.stat.enable_ly_interrupt { 0x40 } else { 0x00 };
+                let bit5 = if self.stat.enable_m2_interrupt { 0x20 } else { 0x00 };
+                let bit4 = if self.stat.enable_m1_interrupt { 0x10 } else { 0x00 };
+                let bit3 = if self.stat.enable_m0_interrupt { 0x08 } else { 0x00 };
+                let bit2 = if self.current_line == self.lyc { 0x04 } else { 0x00 };
+                bit6 | bit5 | bit4 | bit3 | bit2 | self.stat.mode
+            }
 
             /* Scroll Y */
             0xFF42 => self.scroll_y,
@@ -324,10 +332,25 @@ impl GPU {
             /* Current scanline */
             0xFF44 => self.current_line,
 
-            _ => panic!(
-                "Have not implemented read_registers() for '{:X}' for the GPU!",
-                address
-            ),
+            /* LY Compare */
+            0xFF45 => self.lyc,
+
+            /* BG Palette Data */
+            0xFF47 => self.bg_palette,
+
+            /* OBP0 Palette Data */
+            0xFF48 => self.obp0_palette,
+
+            /* OBP1 Palette Data */
+            0xFF49 => self.obp1_palette,
+
+            /* Window Y */
+            0xFF4A => self.window_y,
+
+            /* Window X */
+            0xFF4B => self.window_x,
+
+            _ => 0xFF,
         }
     }
 
@@ -337,7 +360,12 @@ impl GPU {
             0xFF40 => self.lcdc.data = value,
 
             /* STAT */
-            0xFF41 => self.stat = value,
+            0xFF41 => {
+                self.stat.enable_ly_interrupt = value & 0x40 != 0x00;
+                self.stat.enable_m2_interrupt = value & 0x20 != 0x00;
+                self.stat.enable_m1_interrupt = value & 0x10 != 0x00;
+                self.stat.enable_m0_interrupt = value & 0x08 != 0x00;
+            },
 
             /* Scroll Y */
             0xFF42 => self.scroll_y = value,
@@ -360,14 +388,13 @@ impl GPU {
             /* OBP1 Palette Data */
             0xFF49 => self.obp1_palette = value,
 
+            /* Window Y */
             0xFF4A => self.window_y = value,
 
+            /* Window X */
             0xFF4B => self.window_x = value,
 
-            _ => panic!(
-                "Have not yet implemented write_registers() for '{:X}' for the GPU!",
-                address
-            ),
+            _ => panic!(),
         }
     }
 }
