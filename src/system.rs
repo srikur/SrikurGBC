@@ -1,1 +1,10 @@
+pub mod audio;
+pub mod cartridge;
 pub mod cpu;
+pub mod gpu;
+pub mod interrupts;
+pub mod joypad;
+pub mod memory;
+pub mod registers;
+pub mod timer;
+pub mod rtc;
