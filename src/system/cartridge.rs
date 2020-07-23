@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use super::rtc::RealTimeClock;
 
@@ -111,6 +111,19 @@ impl Cartridge {
                 self.game_ram = self.load_ram(self.savepath.clone(), ram_size);
                 self.mbc = MBC::MBC3;
             }
+            0x19 => {
+                self.mbc = MBC::MBC5;
+            }
+            0x1A => {
+                let ram_size = self.get_ram_size(self.game_rom[0x149]);
+                self.game_ram = vec![0; ram_size];
+                self.mbc = MBC::MBC5;
+            }
+            0x1B => {
+                let ram_size = self.get_ram_size(self.game_rom[0x149]);
+                self.game_ram = self.load_ram(self.savepath.clone(), ram_size);
+                self.mbc = MBC::MBC5;
+            }
             _ => panic!("Unimplemented MBC Type!"),
         }
     }
@@ -205,8 +218,23 @@ impl Cartridge {
     }
 
     #[rustfmt::skip]
-    fn read_byte_mbc5(&self, _address: usize) -> u8 {
-        panic!("Unimplemented MBC5!");
+    fn read_byte_mbc5(&self, address: usize) -> u8 {
+        match address {
+            0x0000..=0x3FFF => self.game_rom[address],
+            0x4000..=0x7FFF => {
+                let i = self.rom_bank * 0x4000 + address - 0x4000;
+                self.game_rom[i]
+            }
+            0xa000..=0xbfff => {
+                if self.ram_enabled {
+                    let i = self.ram_bank * 0x2000 + address - 0xA000;
+                    self.game_ram[i]
+                } else {
+                    0x00
+                }
+            }
+            _ => 0x00,
+        }
     }
 
     fn write_byte_none(&mut self, _address: usize, _value: u8) {}
@@ -294,8 +322,61 @@ impl Cartridge {
         }
     }
 
-    fn write_byte_mbc5(&mut self, _address: usize, _value: u8) {
+    fn write_byte_mbc5(&mut self, address: usize, value: u8) {
+        match address {
+            0xA000..=0xBFFF => {
+                if self.ram_enabled {
+                    let i = self.ram_bank * 0x2000 + address - 0xA000;
+                    self.game_ram[i] = value;
+                }
+            }
+            0x0000..=0x1FFF => {
+                self.ram_enabled = value & 0x0F == 0x0A;
+            }
+            0x2000..=0x2FFF => self.rom_bank = (self.rom_bank & 0x100) | (value as usize),
+            0x3000..=0x3FFF => self.rom_bank = (self.rom_bank & 0x0FF) | (((value & 0x01) as usize) << 8),
+            0x4000..=0x5FFF => self.ram_bank = (value & 0x0F) as usize,
+            _ => {}
+        }
+    }
 
+    pub fn save(&mut self) {
+        match self.mbc {
+            MBC::None => {},
+            MBC::MBC1 => {
+                if self.savepath.to_str().unwrap().is_empty() {
+                    return;
+                }
+                File::create(self.savepath.clone())
+                    .and_then(|mut f| f.write_all(&self.game_ram))
+                    .unwrap()
+            },
+            MBC::MBC2 => {
+                if self.savepath.to_str().unwrap().is_empty() {
+                    return;
+                }
+                File::create(self.savepath.clone())
+                    .and_then(|mut f| f.write_all(&self.game_ram))
+                    .unwrap()
+            },
+            MBC::MBC3 => {
+                self.rtc.rtc_save();
+                if self.savepath.to_str().unwrap().is_empty() {
+                    return;
+                }
+                File::create(self.savepath.clone())
+                    .and_then(|mut f| f.write_all(&self.game_ram))
+                    .unwrap();
+            },
+            MBC::MBC5 => {
+                if self.savepath.to_str().unwrap().is_empty() {
+                    return;
+                }
+                File::create(self.savepath.clone())
+                    .and_then(|mut f| f.write_all(&self.game_ram))
+                    .unwrap()
+            },
+        }
     }
 
     pub fn read_byte(&self, address: usize) -> u8 {

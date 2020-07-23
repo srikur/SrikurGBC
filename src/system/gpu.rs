@@ -5,13 +5,12 @@ pub const GPU_REGS_BEGIN: usize = 0xFF40;
 pub const GPU_REGS_END: usize = 0xFF4B;
 pub const OAM_BEGIN: usize = 0xFE00;
 pub const OAM_END: usize = 0xFE9F;
-pub const EXTRA_SPACE_BEGIN: usize = 0xFF01;
+pub const EXTRA_SPACE_BEGIN: usize = 0xFF03;
 pub const EXTRA_SPACE_END: usize = 0xFF3F;
 
 use super::interrupts::{Interrupt, Interrupts};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::cmp::{Ord, Ordering};
 
 pub struct Lcdc {
     pub data: u8,
@@ -100,7 +99,7 @@ pub struct GPU {
     pub lyc: u8, // 0xFF45
 
     // Extra Space??
-    pub extra: [u8; 0x3F],
+    pub extra: [u8; 0x3E],
 
     pub priority: [u8; 160],
 
@@ -127,6 +126,13 @@ pub struct GPU {
     pub vblank: bool,
 }
 
+#[derive(Clone)]
+struct Sprite {
+    pub sprite_num: u16,
+    pub x: u8,
+    pub y: u8,
+}
+
 impl GPU {
 
     pub fn new(intref: Rc<RefCell<Interrupt>>) -> Self {
@@ -143,7 +149,7 @@ impl GPU {
                 mode: 0,
             },
             priority: [0; 160],
-            extra: [0; 0x3F],
+            extra: [0; 0x3E],
             bg_palette: 0,
             obp0_palette: 0,
             obp1_palette: 0,
@@ -224,15 +230,29 @@ impl GPU {
         }
 
         if self.lcdc.bit1() {
-            self.render_sprites();
+            self.render_sprites2();
         }
     }
 
-    fn render_sprites(&mut self) {
+    fn render_sprites2(&mut self) {
+        let mut sprites: Vec<Sprite> = Vec::new();
         let sprite_size = if self.lcdc.bit2() { 16 } else { 8 };
 
         for sprite in 0..40 {
-            let sprite_address = (sprite as u16) * 4;
+            let y_pos = self.oam[sprite * 4 as usize].wrapping_sub(16);
+            let x_pos = self.oam[sprite * 4 as usize + 1].wrapping_sub(8);
+            if (y_pos <= self.current_line) && ((y_pos + sprite_size) > self.current_line) {
+                sprites.push(Sprite{sprite_num: sprite as u16, x: x_pos, y: y_pos});
+            }
+        }
+
+        if sprites.len() > 10 {
+            sprites.resize(10, Sprite{sprite_num: 0, x: 0, y: 0});
+        }
+        sprites.reverse();
+
+        for sprite in sprites {
+            let sprite_address = sprite.sprite_num * 4;
             let y_pos = self.oam[sprite_address as usize].wrapping_sub(16);
             let x_pos = self.oam[sprite_address as usize + 1].wrapping_sub(8);
             let tile_number = self.oam[sprite_address as usize + 2] & if self.lcdc.bit2() { 0xFE } else { 0xFF };
@@ -276,25 +296,6 @@ impl GPU {
                     continue;
                 }
 
-                let sprite_prio = self.priority[x_pos.wrapping_add(pixel) as usize];
-                if !tile_attribute.priority {
-                    if (sprite_prio != 0) && (color <= sprite_prio) {
-                        continue;
-                    }
-                } else if tile_attribute.priority {
-                    if sprite_prio != 0 {
-                        continue;
-                    }
-                }
-
-                /*
-                let sprite_prio = self.priority[x_pos.wrapping_add(pixel) as usize];
-                let skip: bool = sprite_prio != 0;
-                if skip {
-                    continue;
-                }
-                */
-
                 let color = if tile_attribute.palette_number {
                     match self.obp1_palette >> (2 * color) & 0x03 {
                         0x00 => 255,
@@ -311,7 +312,10 @@ impl GPU {
                     }
                 };
 
-                self.screen_data[self.current_line as usize][x_pos.wrapping_add(pixel) as usize] = [color, color, color];
+                let over = (!tile_attribute.priority) || (self.priority[x_pos.wrapping_add(pixel) as usize] == 0);
+                if over {
+                    self.screen_data[self.current_line as usize][x_pos.wrapping_add(pixel) as usize] = [color, color, color];
+                }
             }
         }
     }

@@ -1,4 +1,6 @@
 use std::time::SystemTime;
+use std::fs::File;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 pub struct RealTimeClock {
@@ -57,6 +59,15 @@ impl RealTimeClock {
                 self.dh |= 0x80;
             }
         }
+    }
+
+    pub fn rtc_save(&mut self) {
+        if self.savepath.to_str().unwrap().is_empty() {
+            return;
+        }
+        File::create(self.savepath.clone())
+            .and_then(|mut f| f.write_all(&self.zero.to_be_bytes()))
+            .unwrap()
     }
 
     pub fn read_rtc(&self, address: u16) -> u8 {

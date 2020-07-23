@@ -13,7 +13,7 @@ pub enum Interrupts {
     VBlank,
     LCDStat,
     Timer,
-    Serial,
+    //Serial,
     Joypad,
 }
 
@@ -33,7 +33,7 @@ impl Interrupt {
             Interrupts::VBlank => 0x01,
             Interrupts::LCDStat => 0x02,
             Interrupts::Timer => 0x04,
-            Interrupts::Serial => 0x08,
+            //Interrupts::Serial => 0x08,
             Interrupts::Joypad => 0x10,
         };
         self.interrupt_flag |= mask;

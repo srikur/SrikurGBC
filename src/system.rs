@@ -8,3 +8,6 @@ pub mod memory;
 pub mod registers;
 pub mod timer;
 pub mod rtc;
+pub mod serial;
+pub mod bus;
+pub mod instructions;
