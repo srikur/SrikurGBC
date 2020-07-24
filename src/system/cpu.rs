@@ -252,16 +252,10 @@ impl CPU {
     #[rustfmt::skip]
     fn process_interrupts(&mut self) -> u32 {
 
-        let mut cycles = 0;
-
         if !self.halted && !self.bus.intref.borrow().interrupt_master_enable { return 0; }
 
         let fired = self.bus.intref.borrow().interrupt_enable & self.bus.intref.borrow().interrupt_flag;
         if fired == 0x00 { return 0; }
-
-        if self.halted {
-            cycles += 4;
-        }
 
         self.halted = false;
         if !self.bus.intref.borrow().interrupt_master_enable {
@@ -277,7 +271,7 @@ impl CPU {
         self.sp = self.sp.wrapping_sub(2);
 
         self.pc = 0x40 | ((fired.trailing_zeros() as u16) << 3);
-        cycles + 20
+        16
     }
 
     pub fn execute_instruction(&mut self) -> u32 {
@@ -1507,7 +1501,6 @@ impl CPU {
                     ArithmeticSource::H => self.regs.h,
                     ArithmeticSource::L => self.regs.l,
                     ArithmeticSource::HLAddr => {
-                        self.bus.timer.update_timers(8);
                         self.bus.read_byte(self.regs.get_hl())
                     },
                     ArithmeticSource::U8 => self.read_next_byte(),
@@ -1572,7 +1565,6 @@ impl CPU {
                     ArithmeticSource::H => self.regs.h,
                     ArithmeticSource::L => self.regs.l,
                     ArithmeticSource::HLAddr => {
-                        self.bus.timer.update_timers(8);
                         self.bus.read_byte(self.regs.get_hl())
                     },
                     ArithmeticSource::U8 => self.read_next_byte(),

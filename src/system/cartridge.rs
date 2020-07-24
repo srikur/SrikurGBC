@@ -42,8 +42,8 @@ impl Cartridge {
 
         Cartridge {
             game_rom: rom,
-            savepath: path.as_ref().to_path_buf().with_extension(".sav"),
-            rtc: RealTimeClock::new(path.as_ref().to_path_buf().with_extension(".rtc")),
+            savepath: path.as_ref().to_path_buf().with_extension("sav"),
+            rtc: RealTimeClock::new(path.as_ref().to_path_buf().with_extension("rtc")),
             game_ram: vec![],
             ram_enabled: false,
             bank_mode: Mode::Rom,
