@@ -38,11 +38,22 @@ impl MemoryBus {
         match address {
             /* ROM Banks */
             0x0000..=0x7FFF => {
-                if self.run_bootrom && (address <= 0xFF) {
-                    self.bootrom[address]
-                } else {
-                    self.memory.cartridge.read_byte(address)
+
+                if self.run_bootrom {
+                    if self.gpu.hardware == Hardware::CGB {
+                        if (address < 0x100) || (address > 0x1FF){
+                            return self.bootrom[address];
+                        }
+                    }
+
+                    if self.gpu.hardware == Hardware::DMG {
+                        if address < 0x100 {
+                            return self.bootrom[address];
+                        }
+                    }
                 }
+
+                self.memory.cartridge.read_byte(address)
             }
 
             ERAM_BEGIN..=ERAM_END => self.memory.cartridge.read_byte(address),

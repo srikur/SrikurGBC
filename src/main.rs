@@ -23,7 +23,7 @@ fn main() {
 
     let mut cpu = CPU::new(rom);
     cpu.bus.memory.cartridge.determine_mbc();
-    cpu.bus.run_bootrom = false; // Toggle this to select whether the bootrom should run
+    cpu.bus.run_bootrom = true; // Toggle this to select whether the bootrom should run
     cpu.log = false; // Toggle this to select whether to print trace to log
     cpu.initialize_bootrom();
 

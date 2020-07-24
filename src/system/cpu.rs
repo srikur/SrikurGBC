@@ -92,7 +92,7 @@ impl CPU {
                 speed: Speed::Regular,
                 speed_shift: false,
                 run_bootrom: false,
-                bootrom: vec![0; 256],
+                bootrom: vec![0;0x00],
                 gpu: GPU::new(intref.clone()),
             },
             pc: 0x0000,
@@ -164,12 +164,15 @@ impl CPU {
 
     pub fn initialize_bootrom(&mut self) {
         if self.bus.run_bootrom {
-            self.bus.bootrom = fs::read("dmg_boot.bin").unwrap();
-
-            // Put the bootrom in the rom memory
-            for item in 0..=0xFF {
-                self.bus.write_byte(item as u16, self.bus.bootrom[item]);
+            if self.bus.gpu.hardware == Hardware::CGB {
+                let mut file = fs::File::open("cgb_bios.bin").unwrap();
+                file.read_to_end(&mut self.bus.bootrom).unwrap();
+            } else {
+                let mut file = fs::File::open("dmg_boot.bin").unwrap();
+                file.read_to_end(&mut self.bus.bootrom).unwrap();
             }
+
+            println!("File length: {:X}", self.bus.bootrom.len());
         } else {
             self.pc = 0x100;
             self.initialize_system();
@@ -201,10 +204,10 @@ impl CPU {
                 continue
             } else {
 
-                let mut instruction = self.bus.bootrom[self.pc as usize];
+                let mut instruction = self.bus.read_byte(self.pc);
                 let prefixed = instruction == 0xCB;
                 if prefixed {
-                    instruction = self.bus.bootrom[self.pc as usize + 1];
+                    instruction = self.bus.read_byte(self.pc.wrapping_add(1));
                 }
                 let (next, cycles) =
                     if let Some(instruction) = Instructions::from_byte(instruction, prefixed) {
@@ -212,24 +215,29 @@ impl CPU {
                     } else {
                         panic!("Unknown instruction found! Opcode!");
                 };
-
-                let description = format!("0x{}{:X}", if prefixed { "CB" } else { "" }, instruction);
-                //print!("{}", description);
-                if self.log {
-                    self.log_buffer.write(format!("PC:{:X} Instr:{} AF:{:X} BC:{:X} DE:{:X} HL:{:X}\n", 
-                    self.pc, description, self.regs.get_af(), self.regs.get_bc(), self.regs.get_de(), self.regs.get_hl()).as_bytes()).expect("Unable to write!");
-                }
     
                 self.pc = next;
                 current_cycles += cycles as u32;
                 self.bus.timer.update_timers(cycles as u32);
                 self.bus.gpu.update_graphics(cycles as u32 + 8);
-    
-                if next > 0xFF {
-                    self.bus.run_bootrom = false;
-                    println!("Bootrom finished!");
-                    self.initialize_system();
-                    break;
+
+                match self.bus.gpu.hardware {
+                    Hardware::CGB => {
+                        if next == 0x100 {
+                            self.bus.run_bootrom = false;
+                            self.initialize_system();
+                            println!("Bootrom Finished");
+                            break;
+                        }
+                    }
+                    Hardware::DMG => {
+                        if next > 0xFF {
+                            self.bus.run_bootrom = false;
+                            self.initialize_system();
+                            println!("Bootrom Finished");
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -271,7 +279,7 @@ impl CPU {
     
             // MMU Next 
             self.bus.timer.update_timers(cycles + (self.bus.speed as u32 * hdma_cycles));
-            self.bus.gpu.update_graphics(cycles + 8);
+            self.bus.gpu.update_graphics(cycles + 4);
         }
     }
 
