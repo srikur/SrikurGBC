@@ -1,3 +1,4 @@
 /target
 *.gb
 *.bin
+log.txt

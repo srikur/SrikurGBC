@@ -73,7 +73,7 @@ impl CPU {
 
         let intref = Rc::new(RefCell::new(Interrupt::new()));
 
-        CPU {
+        let mut this = CPU {
             regs: Registers::new(),
             step_cycles: 0,
             icount: 0,
@@ -88,13 +88,28 @@ impl CPU {
                 serial: Serial::new(intref.clone()),
                 keys: Joypad::new(intref.clone()),
                 apu: APU::new(),
+                hdma: HDMA::new(),
+                speed: Speed::Regular,
+                speed_shift: false,
                 run_bootrom: false,
                 bootrom: vec![0; 256],
                 gpu: GPU::new(intref.clone()),
             },
             pc: 0x0000,
             sp: 0x0000,
-        }
+        };
+        let hardware = match this.bus.memory.cartridge.read_byte(0x143) & 0x80 {
+            0x80 => Hardware::CGB,
+            _ => Hardware::DMG,
+        };
+        let code = match hardware {
+            Hardware::CGB => "Yes",
+            Hardware::DMG => "No",
+        };
+        println!("CGB Flag: {}", code);
+        this.bus.gpu.hardware = hardware;
+
+        this
     }
 
     pub fn check_vblank(&mut self) -> bool {
@@ -105,7 +120,11 @@ impl CPU {
 
     pub fn initialize_system(&mut self) {
         /* Power Up Sequence */
-        self.regs.set_af(0x01B0);
+        match self.bus.gpu.hardware {
+            Hardware::CGB => self.regs.a = 0x11,
+            Hardware::DMG => self.regs.a = 0x01,
+        }
+        self.regs.f = FlagsRegister::from(0xB0);
         self.regs.set_bc(0x0013);
         self.regs.set_de(0x00D8);
         self.regs.set_hl(0x014D);
@@ -222,6 +241,10 @@ impl CPU {
         while self.step_cycles < MAX_CYCLES {
             let mut cycles: u32;
 
+            if self.pc == 0x10 {
+                self.bus.change_speed();
+            }
+
             if self.bus.intref.borrow().interrupt_delay {
                 self.icount += 1;
                 if self.icount == 2{
@@ -242,10 +265,61 @@ impl CPU {
                 cycles = self.execute_instruction();
                 self.step_cycles += cycles as u32;
             }
+
+            // Run HDMA
+            let hdma_cycles = self.run_hdma();
     
             // MMU Next 
-            self.bus.timer.update_timers(cycles);
+            self.bus.timer.update_timers(cycles + (self.bus.speed as u32 * hdma_cycles));
             self.bus.gpu.update_graphics(cycles + 8);
+        }
+    }
+
+    fn run_hdma(&mut self) -> u32 {
+        if !self.bus.hdma.active {
+            return 0;
+        }
+        match self.bus.hdma.mode {
+            HDMAMode::GDMA => {
+                let length = u32::from(self.bus.hdma.remain) + 1;
+                for _ in 0..length {
+                    let mem_source = self.bus.hdma.source;
+                    for i in 0..0x10 {
+                        let byte: u8 = self.bus.read_byte(mem_source + i);
+                        self.bus.gpu.write_vram((self.bus.hdma.destination + i) as usize, byte);
+                    }
+                    self.bus.hdma.source += 0x10;
+                    self.bus.hdma.destination += 0x10;
+                    if self.bus.hdma.remain == 0 {
+                        self.bus.hdma.remain = 0x7f;
+                    } else {
+                        self.bus.hdma.remain -= 1;
+                    }
+                }
+                self.bus.hdma.active = false;
+                length * 8 * 4
+            }
+            HDMAMode::HDMA => {
+                if !self.bus.gpu.hblank {
+                    return 0;
+                }
+                let mem_source = self.bus.hdma.source;
+                for i in 0..0x10 {
+                    let byte: u8 = self.bus.read_byte(mem_source + i);
+                    self.bus.gpu.write_vram((self.bus.hdma.destination + i) as usize, byte);
+                }
+                self.bus.hdma.source += 0x10;
+                self.bus.hdma.destination += 0x10;
+                if self.bus.hdma.remain == 0 {
+                    self.bus.hdma.remain = 0x7F;
+                } else {
+                    self.bus.hdma.remain -= 1;
+                }
+                if self.bus.hdma.remain == 0x7F {
+                    self.bus.hdma.active = false;
+                }
+                32
+            }
         }
     }
 
@@ -355,7 +429,6 @@ impl CPU {
             }
 
             Instructions::HALT() => {
-
                 let bug = (self.bus.intref.borrow().interrupt_enable & self.bus.intref.borrow().interrupt_enable & 0x1F) != 0;
                 
                 if !self.bus.intref.borrow().interrupt_master_enable && bug {

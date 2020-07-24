@@ -18,11 +18,22 @@ pub struct MemoryBus {
     pub serial: Serial,
     pub run_bootrom: bool,
     pub bootrom: Vec<u8>,
+
+    // CGB
+    pub speed: Speed,
+    pub speed_shift: bool,
+    pub hdma: HDMA,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum Speed {
+    Regular = 1,
+    Double = 2,
 }
 
 impl MemoryBus {
     pub fn read_byte(&self, address: u16) -> u8 {
-        let mut address = address as usize;
+        let address = address as usize;
 
         match address {
             /* ROM Banks */
@@ -37,14 +48,13 @@ impl MemoryBus {
             ERAM_BEGIN..=ERAM_END => self.memory.cartridge.read_byte(address),
 
             /* Read from VRAM */
-            VRAM_BEGIN..=VRAM_END => self.gpu.read_vram(address - VRAM_BEGIN),
+            VRAM_BEGIN..=VRAM_END => self.gpu.read_vram(address),
 
             /* Read from Work RAM */
-            WRAM_BEGIN..=WRAM_END => self.memory.wram[address - WRAM_BEGIN],
-            0xE000..=0xFDFF => {
-                address -= 0x2000;
-                self.memory.wram[address - WRAM_BEGIN]
-            }
+            0xC000..=0xCFFF => self.memory.wram[address - 0xC000],
+            0xD000..=0xDFFF => self.memory.wram[address - 0xD000 + 0x1000 * self.memory.wram_bank],
+            0xE000..=0xEFFF => self.memory.wram[address - 0xE000],
+            0xF000..=0xFDFF => self.memory.wram[address- 0xF000 + 0x1000 * self.memory.wram_bank],
 
             /* Read from Sprite Attribute Table */
             OAM_BEGIN..=OAM_END => self.gpu.oam[address - OAM_BEGIN],
@@ -53,7 +63,7 @@ impl MemoryBus {
             GPU_REGS_BEGIN..=GPU_REGS_END => self.gpu.read_registers(address),
 
             /* Read from High RAM */
-            ZRAM_BEGIN..=ZRAM_END => self.memory.zram[address - ZRAM_BEGIN],
+            HRAM_BEGIN..=HRAM_END => self.memory.hram[address - HRAM_BEGIN],
 
             /* Not usable memory */
             0xFEA0..=0xFEFF => 0x00,
@@ -91,14 +101,20 @@ impl MemoryBus {
 
             0xFF01..=0xFF02 => self.serial.read_serial(address),
 
-            /* Extra space */
-            EXTRA_SPACE_BEGIN..=EXTRA_SPACE_END => {
-                self.gpu.extra[address - EXTRA_SPACE_BEGIN]
+            0xFF4D => {
+                let first = if self.speed == Speed::Double { 0x80 } else { 0x00 };
+                let second = if self.speed_shift { 0x01 } else { 0x00 };
+                first | second
             }
 
-            0xFF4D => {0x00}
+            0xFF51..=0xFF55 => self.hdma.read_hdma(address as u16), // get hdma
 
-            _ => panic!("Unimplemented register: {:X}", address),
+            0xFF68..=0xFF6B => self.gpu.read_registers(address),
+
+            /* WRAM Bank */
+            0xFF70 => self.memory.wram_bank as u8,
+
+            _ => 0x00,
         }
     }
 
@@ -119,18 +135,14 @@ impl MemoryBus {
 
             /* Write to VRAM */
             VRAM_BEGIN..=VRAM_END => {
-                self.gpu.write_vram(address - VRAM_BEGIN, value);
+                self.gpu.write_vram(address, value);
             }
 
             /* Write to WRAM */
-            WRAM_BEGIN..=WRAM_END => {
-                self.memory.wram[address - WRAM_BEGIN] = value;
-            }
-
-            /* Write to Echo RAM */
-            0xE000..=0xFDFF => {
-                self.memory.wram[address - WRAM_BEGIN - 0x2000] = value;
-            }
+            0xC000..=0xCFFF => self.memory.wram[address - 0xC000] = value,
+            0xD000..=0xDFFF => self.memory.wram[address - 0xD000 + 0x1000 * self.memory.wram_bank] = value,
+            0xE000..=0xEFFF => self.memory.wram[address - 0xE000] = value,
+            0xF000..=0xFDFF => self.memory.wram[address- 0xF000 + 0x1000 * self.memory.wram_bank] = value,
 
             /* Write to I/0 Registers */
             INTERRUPT_FLAG => {
@@ -170,13 +182,9 @@ impl MemoryBus {
 
             0xFF01..=0xFF02 => self.serial.write_serial(address, value),
 
-            EXTRA_SPACE_BEGIN..=EXTRA_SPACE_END => {
-                self.gpu.extra[address - EXTRA_SPACE_BEGIN] = value;
-            }
-
             /* Write to High RAM */
-            ZRAM_BEGIN..=ZRAM_END => {
-                self.memory.zram[address - ZRAM_BEGIN] = value;
+            HRAM_BEGIN..=HRAM_END => {
+                self.memory.hram[address - HRAM_BEGIN] = value;
             }
 
             /* Write to Sprite Attribute Table (OAM) */
@@ -187,8 +195,21 @@ impl MemoryBus {
             /* Not usable memory */
             0xFEA0..=0xFEFF => return, // Invalid memory location
 
-            /* Not usable as well */
-            0xFF4C..=0xFF7F => return,
+            0xFF4D => self.speed_shift = (value & 0x01) == 0x01,
+            
+            0xFF51..=0xFF55 => self.hdma.write_hdma(address as u16, value),
+
+            0xFF68..=0xFF6B => {
+                self.gpu.write_registers(address, value)
+            },
+
+            /* Change WRAM Bank */
+            0xFF70 => {
+                self.memory.wram_bank = match value & 0x07 {
+                    0 => 1,
+                    value => value as usize,
+                };
+            }
 
             /* Write to Interrupts Enable Register */
             INTERRUPT_ENABLE => {
@@ -196,7 +217,7 @@ impl MemoryBus {
             }
 
             /* Write to GPU registers */
-            GPU_REGS_BEGIN..=GPU_REGS_END => {
+            GPU_REGS_BEGIN..=GPU_REGS_END | 0xFF4F => {
                 if address == 0xFF46 {
                     /* DMA Transfer */
                     let value = (value as u16) << 8;
@@ -209,7 +230,7 @@ impl MemoryBus {
                 self.gpu.write_registers(address, value);
             }
 
-            _ => panic!("Unimplemented Register: {:X} Value: {:X}", address, value),
+            _ => {},
         }
 
         
@@ -220,5 +241,16 @@ impl MemoryBus {
         let higher = word & 0xFF;
         self.write_byte(address, higher as u8);
         self.write_byte(address + 1, lower as u8);
+    }
+
+    pub fn change_speed(&mut self) {
+        if self.speed_shift {
+            if self.speed == Speed::Double {
+                self.speed = Speed::Regular;
+            } else {
+                self.speed = Speed::Double;
+            }
+        }
+        self.speed_shift = false;
     }
 }

@@ -1,19 +1,21 @@
 # GameboyEmulator
 Gameboy Emulator in Rust by Srikur Kanuparthy
 
+![alt text](https://github.com/srikur/GameboyEmulator/blob/master/images/gold.png)
 ![alt text](https://github.com/srikur/GameboyEmulator/blob/master/images/tetris.png)
 ![alt text](https://github.com/srikur/GameboyEmulator/blob/master/images/pkmn-blue.png)
-![alt text](https://github.com/srikur/GameboyEmulator/blob/master/images/drmario.png)
+![alt text](https://github.com/srikur/GameboyEmulator/blob/master/images/mario.png)
+![alt text](https://github.com/srikur/GameboyEmulator/blob/master/images/zelda.png)
 
 
 This is a work in progress. Written in Rust. Requires SDL2.
 
 ## TODO
-- Add CGB support
 - Fix timing
 - Add GUI to select rom
 - Add sound
 - Add serial support
+- Fix GBC graphics issues
 
 ## Resources
 Would not have even remotely been possible for me to create this without these resources and so many more.
