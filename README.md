@@ -1,4 +1,4 @@
-# GameboyEmulator
+# SrikurGB
 Gameboy Emulator in Rust by Srikur Kanuparthy
 
 ![alt text](https://github.com/srikur/GameboyEmulator/blob/master/images/gold.png)
