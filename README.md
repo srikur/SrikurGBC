@@ -11,7 +11,8 @@ Gameboy Emulator in Rust by Srikur Kanuparthy
 This is a work in progress. Written in Rust. Requires SDL2.
 
 ## TODO
-- Fix timing
+- Fix timing and FPS synchronization
+- Add Python + Lua scripting
 - Add GUI to select rom
 - Add sound
 - Add serial support
