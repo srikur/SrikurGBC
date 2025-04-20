@@ -67,10 +67,10 @@ pub enum HDMAMode {
 }
 
 pub struct HDMA {
-    pub source: u16, 
+    pub source: u16,
     pub destination: u16,
     pub active: bool,
-    pub mode: HDMAMode, 
+    pub mode: HDMAMode,
     pub remain: u8,
 }
 
@@ -162,7 +162,6 @@ impl Lcdc {
     pub fn bit0(&self) -> bool {
         self.data & 0x01 != 0
     }
-
 }
 
 pub struct Stat {
@@ -174,7 +173,6 @@ pub struct Stat {
 }
 
 pub struct GPU {
-
     pub intref: Rc<RefCell<Interrupt>>,
 
     /* VRAM */
@@ -222,7 +220,7 @@ pub struct GPU {
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub enum Hardware {
-    DMG, 
+    DMG,
     CGB,
 }
 
@@ -234,7 +232,6 @@ struct Sprite {
 }
 
 impl GPU {
-
     pub fn new(intref: Rc<RefCell<Interrupt>>) -> Self {
         GPU {
             intref: intref,
@@ -350,12 +347,12 @@ impl GPU {
             let y_pos = self.oam[sprite * 4 as usize].wrapping_sub(16);
             let x_pos = self.oam[sprite * 4 as usize + 1].wrapping_sub(8);
             if (y_pos <= self.current_line) && ((y_pos + sprite_size) > self.current_line) {
-                sprites.push(Sprite{sprite_num: sprite as u16, x: x_pos, y: y_pos});
+                sprites.push(Sprite { sprite_num: sprite as u16, x: x_pos, y: y_pos });
             }
         }
 
         if sprites.len() > 10 {
-            sprites.resize(10, Sprite{sprite_num: 0, x: 0, y: 0});
+            sprites.resize(10, Sprite { sprite_num: 0, x: 0, y: 0 });
         }
         sprites.reverse();
 
@@ -642,7 +639,7 @@ impl GPU {
                 self.stat.enable_m2_interrupt = value & 0x20 != 0x00;
                 self.stat.enable_m1_interrupt = value & 0x10 != 0x00;
                 self.stat.enable_m0_interrupt = value & 0x08 != 0x00;
-            },
+            }
 
             /* Scroll Y */
             0xFF42 => self.scroll_y = value,

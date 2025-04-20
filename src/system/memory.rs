@@ -1,5 +1,5 @@
 use super::cartridge;
-use std::path::{Path};
+use std::path::Path;
 
 pub const ERAM_BEGIN: usize = 0xA000;
 pub const ERAM_END: usize = 0xBFFF;

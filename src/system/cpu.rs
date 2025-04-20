@@ -1,18 +1,18 @@
+use super::audio::*;
+use super::bus::*;
+use super::gpu::*;
+use super::instructions::*;
+use super::interrupts::*;
+use super::joypad::*;
+use super::memory::*;
+use super::registers::*;
+use super::serial::*;
+use super::timer::*;
+use std::cell::RefCell;
 use std::fs;
 use std::io::prelude::*;
-use std::path::{Path};
+use std::path::Path;
 use std::rc::Rc;
-use std::cell::RefCell;
-use super::registers::*;
-use super::interrupts::*;
-use super::memory::*;
-use super::gpu::*;
-use super::joypad::*;
-use super::timer::*;
-use super::audio::*;
-use super::serial::*;
-use super::bus::*;
-use super::instructions::*;
 
 pub struct CPU {
     pub regs: Registers,
@@ -30,7 +30,7 @@ pub struct CPU {
     pub log_buffer: std::fs::File,
 
     // Timing
-    pub step_cycles: u32, 
+    pub step_cycles: u32,
 }
 
 #[rustfmt::skip]
@@ -70,7 +70,6 @@ pub enum JumpTest {
 
 impl CPU {
     pub fn new(path: impl AsRef<Path>) -> CPU {
-
         let intref = Rc::new(RefCell::new(Interrupt::new()));
 
         let mut this = CPU {
@@ -92,7 +91,7 @@ impl CPU {
                 speed: Speed::Regular,
                 speed_shift: false,
                 run_bootrom: false,
-                bootrom: vec![0;0x00],
+                bootrom: vec![0; 0x00],
                 gpu: GPU::new(intref.clone()),
             },
             pc: 0x0000,
@@ -183,10 +182,9 @@ impl CPU {
         let mut current_cycles: u32 = 0;
 
         while current_cycles < MAX_CYCLES {
-
             if self.bus.intref.borrow().interrupt_delay {
                 self.icount += 1;
-                if self.icount == 2{
+                if self.icount == 2 {
                     self.bus.intref.borrow_mut().interrupt_delay = false;
                     self.bus.intref.borrow_mut().interrupt_master_enable = true;
                 }
@@ -198,12 +196,11 @@ impl CPU {
 
             if cycles != 0 {
                 current_cycles += cycles as u32;
-                continue
+                continue;
             } else if self.halted {
                 current_cycles += 4;
-                continue
+                continue;
             } else {
-
                 let mut instruction = self.bus.read_byte(self.pc);
                 let prefixed = instruction == 0xCB;
                 if prefixed {
@@ -214,8 +211,8 @@ impl CPU {
                         self.decode_instruction(instruction)
                     } else {
                         panic!("Unknown instruction found! Opcode!");
-                };
-    
+                    };
+
                 self.pc = next;
                 current_cycles += cycles as u32;
                 self.bus.timer.update_timers(cycles as u32);
@@ -255,7 +252,7 @@ impl CPU {
 
             if self.bus.intref.borrow().interrupt_delay {
                 self.icount += 1;
-                if self.icount == 2{
+                if self.icount == 2 {
                     self.bus.intref.borrow_mut().interrupt_delay = false;
                     self.bus.intref.borrow_mut().interrupt_master_enable = true;
                 }
@@ -276,7 +273,7 @@ impl CPU {
 
             // Run HDMA
             let hdma_cycles = self.run_hdma();
-    
+
             // MMU Next 
             self.bus.timer.update_timers(cycles + (self.bus.speed as u32 * hdma_cycles));
             self.bus.gpu.update_graphics(cycles + 4);
@@ -337,7 +334,9 @@ impl CPU {
         if !self.halted && !self.bus.intref.borrow().interrupt_master_enable { return 0; }
 
         let fired = self.bus.intref.borrow().interrupt_enable & self.bus.intref.borrow().interrupt_flag;
-        if fired == 0x00 { return 0; }
+        if fired == 0x00 { 
+            return 0;
+        }
 
         self.halted = false;
         if !self.bus.intref.borrow().interrupt_master_enable {
@@ -347,7 +346,6 @@ impl CPU {
 
         let flag = self.bus.intref.borrow().interrupt_flag & !(1 << fired.trailing_zeros());
         self.bus.intref.borrow_mut().interrupt_flag = flag;
-
         self.bus.write_byte(self.sp.wrapping_sub(1), (self.pc >> 8) as u8);
         self.bus.write_byte(self.sp.wrapping_sub(2), (self.pc & 0xFF) as u8);
         self.sp = self.sp.wrapping_sub(2);
@@ -382,8 +380,8 @@ impl CPU {
         //print!("{} ", description);
 
         if self.log {
-            self.log_buffer.write(format!("PC:{:X} Instr:{} AF:{:X} BC:{:X} DE:{:X} HL:{:X}\n", 
-            self.pc, description, self.regs.get_af(), self.regs.get_bc(), self.regs.get_de(), self.regs.get_hl()).as_bytes()).expect("Unable to write!");
+            self.log_buffer.write(format!("PC:{:X} Instr:{} AF:{:X} BC:{:X} DE:{:X} HL:{:X}\n",
+                                          self.pc, description, self.regs.get_af(), self.regs.get_bc(), self.regs.get_de(), self.regs.get_hl()).as_bytes()).expect("Unable to write!");
         }
 
         self.pc = next;
@@ -392,28 +390,26 @@ impl CPU {
 
     fn decode_instruction(&mut self, instruction: Instructions) -> (u16, u8) {
         match instruction {
-
             Instructions::DAA() => {
-
                 let mut carry = false;
                 if !self.regs.f.subtract {  // after an addition, adjust if (half-)carry occurred or if result is out of bounds
-                    if self.regs.f.carry || self.regs.a > 0x99 { 
-                        self.regs.a = self.regs.a.wrapping_add(0x60); 
-                        carry = true; 
+                    if self.regs.f.carry || self.regs.a > 0x99 {
+                        self.regs.a = self.regs.a.wrapping_add(0x60);
+                        carry = true;
                     }
-                    if self.regs.f.half_carry || (self.regs.a & 0x0F) > 0x09 { 
-                        self.regs.a = self.regs.a.wrapping_add(0x06); 
+                    if self.regs.f.half_carry || (self.regs.a & 0x0F) > 0x09 {
+                        self.regs.a = self.regs.a.wrapping_add(0x06);
                     }
-                } else if self.regs.f.carry { 
+                } else if self.regs.f.carry {
                     carry = true;
-                    self.regs.a = self.regs.a.wrapping_add(if self.regs.f.half_carry {0x9A} else {0xA0}); 
+                    self.regs.a = self.regs.a.wrapping_add(if self.regs.f.half_carry { 0x9A } else { 0xA0 });
                 } else if self.regs.f.half_carry {
                     self.regs.a = self.regs.a.wrapping_add(0xFA);
                 }
 
-                  self.regs.f.carry = carry;
-                  self.regs.f.zero = self.regs.a == 0;
-                  self.regs.f.half_carry = false;
+                self.regs.f.carry = carry;
+                self.regs.f.zero = self.regs.a == 0;
+                self.regs.f.half_carry = false;
 
                 (self.pc.wrapping_add(1), 4)
             }
@@ -438,7 +434,7 @@ impl CPU {
 
             Instructions::HALT() => {
                 let bug = (self.bus.intref.borrow().interrupt_enable & self.bus.intref.borrow().interrupt_enable & 0x1F) != 0;
-                
+
                 if !self.bus.intref.borrow().interrupt_master_enable && bug {
                     //halt bug - halt mode is NOT entered. CPU fails to increase PC after executing next instruction
                     self.halt_bug = true;
@@ -485,7 +481,7 @@ impl CPU {
             }
 
             Instructions::RLCA() => {
-                let old: u8 = if (self.regs.a & 0x80) != 0 {1} else {0};
+                let old: u8 = if (self.regs.a & 0x80) != 0 { 1 } else { 0 };
                 self.regs.f.carry = old != 0;
                 self.regs.a = (self.regs.a << 1) | old;
                 self.regs.f.zero = false;
@@ -500,7 +496,7 @@ impl CPU {
 
                 match source {
                     ArithmeticSource::A => {
-                        old = if (self.regs.a & 0x80) != 0 {1} else {0};
+                        old = if (self.regs.a & 0x80) != 0 { 1 } else { 0 };
                         self.regs.f.carry = old != 0;
                         new_value = (self.regs.a << 1) | old;
                         self.regs.a = new_value;
@@ -508,7 +504,7 @@ impl CPU {
                     }
 
                     ArithmeticSource::B => {
-                        old = if (self.regs.b & 0x80) != 0 {1} else {0};
+                        old = if (self.regs.b & 0x80) != 0 { 1 } else { 0 };
                         self.regs.f.carry = old != 0;
                         new_value = (self.regs.b << 1) | old;
                         self.regs.b = new_value;
@@ -516,7 +512,7 @@ impl CPU {
                     }
 
                     ArithmeticSource::C => {
-                        old = if (self.regs.c & 0x80) != 0 {1} else {0};
+                        old = if (self.regs.c & 0x80) != 0 { 1 } else { 0 };
                         self.regs.f.carry = old != 0;
                         new_value = (self.regs.c << 1) | old;
                         self.regs.c = new_value;
@@ -524,7 +520,7 @@ impl CPU {
                     }
 
                     ArithmeticSource::D => {
-                        old = if (self.regs.d & 0x80) != 0 {1} else {0};
+                        old = if (self.regs.d & 0x80) != 0 { 1 } else { 0 };
                         self.regs.f.carry = old != 0;
                         new_value = (self.regs.d << 1) | old;
                         self.regs.d = new_value;
@@ -532,7 +528,7 @@ impl CPU {
                     }
 
                     ArithmeticSource::E => {
-                        old = if (self.regs.e & 0x80) != 0 {1} else {0};
+                        old = if (self.regs.e & 0x80) != 0 { 1 } else { 0 };
                         self.regs.f.carry = old != 0;
                         new_value = (self.regs.e << 1) | old;
                         self.regs.e = new_value;
@@ -540,7 +536,7 @@ impl CPU {
                     }
 
                     ArithmeticSource::H => {
-                        old = if (self.regs.h & 0x80) != 0 {1} else {0};
+                        old = if (self.regs.h & 0x80) != 0 { 1 } else { 0 };
                         self.regs.f.carry = old != 0;
                         new_value = (self.regs.h << 1) | old;
                         self.regs.h = new_value;
@@ -548,7 +544,7 @@ impl CPU {
                     }
 
                     ArithmeticSource::L => {
-                        old = if (self.regs.l & 0x80) != 0 {1} else {0};
+                        old = if (self.regs.l & 0x80) != 0 { 1 } else { 0 };
                         self.regs.f.carry = old != 0;
                         new_value = (self.regs.l << 1) | old;
                         self.regs.l = new_value;
@@ -557,7 +553,7 @@ impl CPU {
 
                     ArithmeticSource::HLAddr => {
                         let mut byte = self.bus.read_byte(self.regs.get_hl());
-                        old = if (byte & 0x80) != 0 {1} else {0};
+                        old = if (byte & 0x80) != 0 { 1 } else { 0 };
                         self.regs.f.carry = old != 0;
                         byte = (byte << 1) | old;
                         self.bus.write_byte(self.regs.get_hl(), byte);
@@ -590,7 +586,7 @@ impl CPU {
             Instructions::RL(source) => {
                 if source == ArithmeticSource::HLAddr {
                     let mut byte = self.bus.read_byte(self.regs.get_hl());
-                    let flag_c = if self.regs.f.carry {1} else {0};
+                    let flag_c = if self.regs.f.carry { 1 } else { 0 };
                     self.regs.f.carry = (byte & 0x80) != 0;
                     byte = (byte << 1) | flag_c;
                     self.bus.write_byte(self.regs.get_hl(), byte);
@@ -728,7 +724,7 @@ impl CPU {
                     ArithmeticSource::HLAddr => {
                         let carry = value & 0x01 == 0x01;
                         self.regs.f.carry = carry;
-                        value = if carry { 0x80 | (value >> 1) } else {value >> 1 };
+                        value = if carry { 0x80 | (value >> 1) } else { value >> 1 };
                         self.bus.write_byte(self.regs.get_hl(), value);
                         self.regs.f.zero = value == 0;
                         self.regs.f.subtract = false;
@@ -906,7 +902,6 @@ impl CPU {
                 }
 
                 match target {
-
                     IncDecTarget::HLAddr => (self.pc.wrapping_add(1), 12),
 
                     IncDecTarget::HL | IncDecTarget::BC | IncDecTarget::DE | IncDecTarget::SP => {
@@ -1006,7 +1001,7 @@ impl CPU {
                         self.regs.a = self.bus.read_byte(a);
                         (self.pc.wrapping_add(1), 8)
                     } else { unreachable!() }
-                },
+                }
                 _ => unreachable!(),
             },
 
@@ -1039,7 +1034,6 @@ impl CPU {
                             } else {
                                 self.regs.set_hl(source_value);
                             }
-                            
                         }
                         LoadWordTarget::A16 => {
                             self.bus.write_word(self.read_next_word(), source_value);
@@ -1557,7 +1551,7 @@ impl CPU {
                     ArithmeticSource::I8 => unreachable!(),
                 };
 
-                let flag_carry = if self.regs.f.carry {1} else {0};
+                let flag_carry = if self.regs.f.carry { 1 } else { 0 };
                 let r = self.regs.a.wrapping_sub(source_value).wrapping_sub(flag_carry);
                 self.regs.f.carry = u16::from(self.regs.a) < (u16::from(source_value) + u16::from(flag_carry));
                 self.regs.f.half_carry = (self.regs.a & 0xF) < ((source_value & 0xF) + flag_carry);
@@ -1583,12 +1577,12 @@ impl CPU {
                     ArithmeticSource::L => self.regs.l,
                     ArithmeticSource::HLAddr => {
                         self.bus.read_byte(self.regs.get_hl())
-                    },
+                    }
                     ArithmeticSource::U8 => self.read_next_byte(),
                     ArithmeticSource::I8 => unreachable!(),
                 };
 
-                let flag_carry = if self.regs.f.carry {1} else {0};
+                let flag_carry = if self.regs.f.carry { 1 } else { 0 };
                 let r = self.regs.a.wrapping_add(source_value).wrapping_add(flag_carry);
                 self.regs.f.carry = (u16::from(self.regs.a) + u16::from(source_value) + u16::from(flag_carry)) > 0xFF;
                 self.regs.f.half_carry = ((self.regs.a & 0xF) + (source_value & 0xF) + (flag_carry & 0xF)) > 0xF;
@@ -1647,7 +1641,7 @@ impl CPU {
                     ArithmeticSource::L => self.regs.l,
                     ArithmeticSource::HLAddr => {
                         self.bus.read_byte(self.regs.get_hl())
-                    },
+                    }
                     ArithmeticSource::U8 => self.read_next_byte(),
                     _ => unreachable!(),
                 };

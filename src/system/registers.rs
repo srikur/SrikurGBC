@@ -43,7 +43,6 @@ impl std::convert::From<u8> for FlagsRegister {
 }
 
 impl Registers {
-
     pub fn new() -> Self {
         Registers {
             a: 0x00,

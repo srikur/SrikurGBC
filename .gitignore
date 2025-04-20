@@ -2,3 +2,8 @@
 *.gb
 *.bin
 log.txt
+*.o
+.DS_Store
+/*.idea
+/.vscode
+.nvimlog

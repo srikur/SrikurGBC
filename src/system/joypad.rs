@@ -1,8 +1,8 @@
 pub const JOYPAD_INPUT: usize = 0xFF00;
 
 use super::interrupts::{Interrupt, Interrupts};
-use std::rc::Rc;
 use std::cell::RefCell;
+use std::rc::Rc;
 
 pub struct Joypad {
     pub intref: Rc<RefCell<Interrupt>>,
@@ -11,18 +11,17 @@ pub struct Joypad {
 }
 
 pub enum Keys {
-    Right  = 0x01,
-    Left   = 0x02,
-    Up     = 0x04,
-    Down   = 0x08,
-    A      = 0x10,
-    B      = 0x20,
+    Right = 0x01,
+    Left = 0x02,
+    Up = 0x04,
+    Down = 0x08,
+    A = 0x10,
+    B = 0x20,
     Select = 0x40,
-    Start  = 0x80,
+    Start = 0x80,
 }
 
 impl Joypad {
-
     pub fn new(int: Rc<RefCell<Interrupt>>) -> Self {
         Joypad {
             intref: int,

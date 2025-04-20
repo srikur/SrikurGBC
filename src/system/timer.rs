@@ -1,6 +1,6 @@
 use super::interrupts::{Interrupt, Interrupts};
-use std::rc::Rc;
 use std::cell::RefCell;
+use std::rc::Rc;
 
 pub const DIVIDER_REGISTER: usize = 0xFF04;
 pub const TIMA: usize = 0xFF05;
@@ -10,7 +10,7 @@ pub const MAX_CYCLES: u32 = 69905;
 
 pub struct Timer {
     pub intref: Rc<RefCell<Interrupt>>,
-    pub tima: u8, // timer counter     
+    pub tima: u8, // timer counter
     pub clock_counter: u32,
     pub divider_register: u8,
     pub divider_counter: u32,
@@ -34,7 +34,6 @@ impl Timer {
     }
 
     pub fn update_timers(&mut self, cycles: u32) {
-
         self.divider_counter += cycles;
         while self.divider_counter > 256 {
             self.divider_register = self.divider_register.wrapping_add(1);

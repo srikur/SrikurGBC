@@ -1,7 +1,7 @@
-use std::time::SystemTime;
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 pub struct RealTimeClock {
     pub s: u8,

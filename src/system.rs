@@ -1,13 +1,13 @@
 pub mod audio;
+pub mod bus;
 pub mod cartridge;
 pub mod cpu;
 pub mod gpu;
+pub mod instructions;
 pub mod interrupts;
 pub mod joypad;
 pub mod memory;
 pub mod registers;
-pub mod timer;
 pub mod rtc;
 pub mod serial;
-pub mod bus;
-pub mod instructions;
+pub mod timer;

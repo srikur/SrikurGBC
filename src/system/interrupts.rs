@@ -18,7 +18,6 @@ pub enum Interrupts {
 }
 
 impl Interrupt {
-
     pub fn new() -> Self {
         Interrupt {
             interrupt_enable: 0,

@@ -1,11 +1,11 @@
 # SrikurGB
 Gameboy Emulator in Rust by Srikur Kanuparthy
 
-![alt text](https://github.com/srikur/GameboyEmulator/blob/master/images/gold.png)
-![alt text](https://github.com/srikur/GameboyEmulator/blob/master/images/tetris.png)
-![alt text](https://github.com/srikur/GameboyEmulator/blob/master/images/pkmn-blue.png)
-![alt text](https://github.com/srikur/GameboyEmulator/blob/master/images/mario.png)
-![alt text](https://github.com/srikur/GameboyEmulator/blob/master/images/zelda.png)
+![alt text](images/gold.png)
+![alt text](images/tetris.png)
+![alt text](images/pkmn-blue.png)
+![alt text](images/mario.png)
+![alt text](images/zelda.png)
 
 
 This is a work in progress. Written in Rust. Requires SDL2.

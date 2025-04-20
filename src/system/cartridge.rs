@@ -1,7 +1,7 @@
+use super::rtc::RealTimeClock;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use super::rtc::RealTimeClock;
 
 pub struct Cartridge {
     pub savepath: PathBuf,
@@ -10,7 +10,7 @@ pub struct Cartridge {
     pub ram_enabled: bool,
     pub bank_mode: Mode,
     pub rtc: RealTimeClock,
-    pub rom_bank: usize, 
+    pub rom_bank: usize,
     pub ram_bank: usize,
     pub bank: u8,
     pub mbc: MBC,
@@ -23,16 +23,14 @@ pub enum Mode {
 
 pub enum MBC {
     None,
-    MBC1, 
-    MBC2, 
-    MBC3, 
+    MBC1,
+    MBC2,
+    MBC3,
     MBC5,
 }
 
 impl Cartridge {
-
     pub fn new(path: impl AsRef<Path>) -> Self {
-
         let mut file = File::open(path.as_ref()).unwrap();
         let mut rom = Vec::new();
         file.read_to_end(&mut rom).unwrap();
@@ -66,7 +64,9 @@ impl Cartridge {
     }
 
     pub fn determine_mbc(&mut self) {
-        if self.game_rom.len() > self.get_rom_size(self.game_rom[0x148]) { panic!("Incorrect ROM size!") }
+        if self.game_rom.len() > self.get_rom_size(self.game_rom[0x148]) {
+            panic!("Incorrect ROM size!")
+        }
         let cart_type = self.game_rom[0x147];
         println!("MBC Value: {:X}", cart_type);
         match cart_type {
@@ -162,14 +162,14 @@ impl Cartridge {
     fn rom_bank(&self) -> usize {
         match self.bank_mode {
             Mode::Rom => usize::from(self.bank & 0x7F),
-            Mode::Ram => usize::from(self.bank & 0x1F), 
+            Mode::Ram => usize::from(self.bank & 0x1F),
         }
     }
 
     fn ram_bank(&self) -> usize {
         match self.bank_mode {
             Mode::Rom => 0x00,
-            Mode::Ram => usize::from((self.bank & 0x60) >> 5), 
+            Mode::Ram => usize::from((self.bank & 0x60) >> 5),
         }
     }
 
@@ -177,27 +177,36 @@ impl Cartridge {
         self.game_rom[address]
     }
 
-    #[rustfmt::skip]
     fn read_byte_mbc1(&self, address: usize) -> u8 {
         match address {
             0x0000..=0x3FFF => self.game_rom[address],
             0x4000..=0x7FFF => self.game_rom[self.rom_bank() * 0x4000 + address - 0x4000],
-            0xA000..=0xBFFF => if self.ram_enabled { self.game_ram[self.ram_bank() * 0x2000 + address - 0xA000] } else {0x00},
+            0xA000..=0xBFFF => {
+                if self.ram_enabled {
+                    self.game_ram[self.ram_bank() * 0x2000 + address - 0xA000]
+                } else {
+                    0x00
+                }
+            }
             _ => 0xFF,
         }
     }
 
-    #[rustfmt::skip]
     fn read_byte_mbc2(&self, address: usize) -> u8 {
         match address {
             0x0000..=0x3FFF => self.game_rom[address],
             0x4000..=0x7FFF => self.game_rom[self.rom_bank * 0x4000 + address - 0x4000],
-            0xA000..=0xA1FF => if self.ram_enabled { self.game_ram[address - 0xA000] } else {0x00},
+            0xA000..=0xA1FF => {
+                if self.ram_enabled {
+                    self.game_ram[address - 0xA000]
+                } else {
+                    0x00
+                }
+            }
             _ => 0xFF,
         }
     }
 
-    #[rustfmt::skip]
     fn read_byte_mbc3(&self, address: usize) -> u8 {
         match address {
             0x0000..=0x3FFF => self.game_rom[address],
@@ -217,7 +226,6 @@ impl Cartridge {
         }
     }
 
-    #[rustfmt::skip]
     fn read_byte_mbc5(&self, address: usize) -> u8 {
         match address {
             0x0000..=0x3FFF => self.game_rom[address],
@@ -239,7 +247,6 @@ impl Cartridge {
 
     fn write_byte_none(&mut self, _address: usize, _value: u8) {}
 
-    #[rustfmt::skip]
     fn write_byte_mbc1(&mut self, address: usize, value: u8) {
         match address {
             0xA000..=0xBFFF => {
@@ -248,7 +255,9 @@ impl Cartridge {
                     self.game_ram[i] = value;
                 }
             }
-            0x0000..=0x1FFF => { self.ram_enabled = value & 0x0F == 0x0A; }
+            0x0000..=0x1FFF => {
+                self.ram_enabled = value & 0x0F == 0x0A;
+            }
             0x2000..=0x3FFF => {
                 let value = value & 0x1F;
                 let value = match value {
@@ -257,7 +266,7 @@ impl Cartridge {
                 };
                 self.bank = (self.bank & 0x60) | value;
             }
-            0x4000..=0x5FFF => { self.bank = self.bank & 0x9F | ((value & 0x03) << 5) }
+            0x4000..=0x5FFF => self.bank = self.bank & 0x9F | ((value & 0x03) << 5),
             0x6000..=0x7FFF => match value {
                 0x00 => self.bank_mode = Mode::Rom,
                 0x01 => self.bank_mode = Mode::Ram,
@@ -289,7 +298,6 @@ impl Cartridge {
         }
     }
 
-    #[rustfmt::skip]
     fn write_byte_mbc3(&mut self, address: usize, value: u8) {
         match address {
             0xA000..=0xBFFF => {
@@ -312,7 +320,9 @@ impl Cartridge {
                 };
                 self.rom_bank = value;
             }
-            0x4000..=0x5FFF => { self.ram_bank = (value & 0x0F) as usize; }
+            0x4000..=0x5FFF => {
+                self.ram_bank = (value & 0x0F) as usize;
+            }
             0x6000..=0x7FFF => {
                 if value & 0x01 != 0 {
                     self.rtc.tick();
@@ -334,7 +344,9 @@ impl Cartridge {
                 self.ram_enabled = value & 0x0F == 0x0A;
             }
             0x2000..=0x2FFF => self.rom_bank = (self.rom_bank & 0x100) | (value as usize),
-            0x3000..=0x3FFF => self.rom_bank = (self.rom_bank & 0x0FF) | (((value & 0x01) as usize) << 8),
+            0x3000..=0x3FFF => {
+                self.rom_bank = (self.rom_bank & 0x0FF) | (((value & 0x01) as usize) << 8)
+            }
             0x4000..=0x5FFF => self.ram_bank = (value & 0x0F) as usize,
             _ => {}
         }
@@ -342,7 +354,7 @@ impl Cartridge {
 
     pub fn save(&mut self) {
         match self.mbc {
-            MBC::None => {},
+            MBC::None => {}
             MBC::MBC1 => {
                 if self.savepath.to_str().unwrap().is_empty() {
                     return;
@@ -350,7 +362,7 @@ impl Cartridge {
                 File::create(self.savepath.clone())
                     .and_then(|mut f| f.write_all(&self.game_ram))
                     .unwrap()
-            },
+            }
             MBC::MBC2 => {
                 if self.savepath.to_str().unwrap().is_empty() {
                     return;
@@ -358,7 +370,7 @@ impl Cartridge {
                 File::create(self.savepath.clone())
                     .and_then(|mut f| f.write_all(&self.game_ram))
                     .unwrap()
-            },
+            }
             MBC::MBC3 => {
                 self.rtc.rtc_save();
                 if self.savepath.to_str().unwrap().is_empty() {
@@ -367,7 +379,7 @@ impl Cartridge {
                 File::create(self.savepath.clone())
                     .and_then(|mut f| f.write_all(&self.game_ram))
                     .unwrap();
-            },
+            }
             MBC::MBC5 => {
                 if self.savepath.to_str().unwrap().is_empty() {
                     return;
@@ -375,7 +387,7 @@ impl Cartridge {
                 File::create(self.savepath.clone())
                     .and_then(|mut f| f.write_all(&self.game_ram))
                     .unwrap()
-            },
+            }
         }
     }
 

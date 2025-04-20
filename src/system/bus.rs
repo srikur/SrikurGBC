@@ -1,12 +1,12 @@
-use super::interrupts::*;
-use super::memory::*;
-use super::gpu::*;
-use super::joypad::*;
-use super::timer::*;
 use super::audio::*;
+use super::gpu::*;
+use super::interrupts::*;
+use super::joypad::*;
+use super::memory::*;
 use super::serial::*;
-use std::rc::Rc;
+use super::timer::*;
 use std::cell::RefCell;
+use std::rc::Rc;
 
 pub struct MemoryBus {
     pub intref: Rc<RefCell<Interrupt>>,
@@ -38,10 +38,9 @@ impl MemoryBus {
         match address {
             /* ROM Banks */
             0x0000..=0x7FFF => {
-
                 if self.run_bootrom {
                     if self.gpu.hardware == Hardware::CGB {
-                        if (address < 0x100) || (address > 0x1FF){
+                        if (address < 0x100) || (address > 0x1FF) {
                             return self.bootrom[address];
                         }
                     }
@@ -65,7 +64,7 @@ impl MemoryBus {
             0xC000..=0xCFFF => self.memory.wram[address - 0xC000],
             0xD000..=0xDFFF => self.memory.wram[address - 0xD000 + 0x1000 * self.memory.wram_bank],
             0xE000..=0xEFFF => self.memory.wram[address - 0xE000],
-            0xF000..=0xFDFF => self.memory.wram[address- 0xF000 + 0x1000 * self.memory.wram_bank],
+            0xF000..=0xFDFF => self.memory.wram[address - 0xF000 + 0x1000 * self.memory.wram_bank],
 
             /* Read from Sprite Attribute Table */
             OAM_BEGIN..=OAM_END => self.gpu.oam[address - OAM_BEGIN],
@@ -96,16 +95,16 @@ impl MemoryBus {
 
             /* TAC - Timer Control */
             TAC => {
-                let clock = if self.timer.clock_enabled {1} else {0};
+                let clock = if self.timer.clock_enabled { 1 } else { 0 };
                 let speed = match self.timer.input_clock_speed {
-                    1024 => 0, 
-                    6 => 1, 
+                    1024 => 0,
+                    6 => 1,
                     64 => 2,
                     256 => 3,
                     _ => 0,
                 };
                 (clock << 2) | speed
-            },
+            }
 
             /* Audio Controls */
             SOUND_BEGIN..=SOUND_END => self.apu.read_byte(address),
@@ -113,7 +112,11 @@ impl MemoryBus {
             0xFF01..=0xFF02 => self.serial.read_serial(address),
 
             0xFF4D => {
-                let first = if self.speed == Speed::Double { 0x80 } else { 0x00 };
+                let first = if self.speed == Speed::Double {
+                    0x80
+                } else {
+                    0x00
+                };
                 let second = if self.speed_shift { 0x01 } else { 0x00 };
                 first | second
             }
@@ -130,7 +133,6 @@ impl MemoryBus {
     }
 
     pub fn write_byte(&mut self, address: u16, value: u8) {
-
         let address = address as usize;
         match address {
             /* Handle Banking */
@@ -151,9 +153,13 @@ impl MemoryBus {
 
             /* Write to WRAM */
             0xC000..=0xCFFF => self.memory.wram[address - 0xC000] = value,
-            0xD000..=0xDFFF => self.memory.wram[address - 0xD000 + 0x1000 * self.memory.wram_bank] = value,
+            0xD000..=0xDFFF => {
+                self.memory.wram[address - 0xD000 + 0x1000 * self.memory.wram_bank] = value
+            }
             0xE000..=0xEFFF => self.memory.wram[address - 0xE000] = value,
-            0xF000..=0xFDFF => self.memory.wram[address- 0xF000 + 0x1000 * self.memory.wram_bank] = value,
+            0xF000..=0xFDFF => {
+                self.memory.wram[address - 0xF000 + 0x1000 * self.memory.wram_bank] = value
+            }
 
             /* Write to I/0 Registers */
             INTERRUPT_FLAG => {
@@ -207,12 +213,10 @@ impl MemoryBus {
             0xFEA0..=0xFEFF => return, // Invalid memory location
 
             0xFF4D => self.speed_shift = (value & 0x01) == 0x01,
-            
+
             0xFF51..=0xFF55 => self.hdma.write_hdma(address as u16, value),
 
-            0xFF68..=0xFF6B => {
-                self.gpu.write_registers(address, value)
-            },
+            0xFF68..=0xFF6B => self.gpu.write_registers(address, value),
 
             /* Change WRAM Bank */
             0xFF70 => {
@@ -241,10 +245,8 @@ impl MemoryBus {
                 self.gpu.write_registers(address, value);
             }
 
-            _ => {},
+            _ => {}
         }
-
-        
     }
 
     pub fn write_word(&mut self, address: u16, word: u16) {

@@ -1,13 +1,13 @@
 use super::cpu::*;
 
-#[derive(PartialEq)]
 #[rustfmt::skip]
+#[derive(PartialEq)]
 pub enum LoadByteTarget {
     A, B, C, D, E, H, L, HLI, HLD, HL, BC, DE, A16,
 }
 
-#[derive(PartialEq)]
 #[rustfmt::skip]
+#[derive(PartialEq)]
 pub enum LoadByteSource {
     A, B, C, D, E, H, L, D8, HL, HLI, HLD, A16, BC, DE,
 }
@@ -25,16 +25,23 @@ pub enum LoadWordTarget {
 
 #[derive(PartialEq)]
 pub enum LoadOtherTarget {
-    A, A8, CAddress,
+    A,
+    A8,
+    CAddress,
 }
 
 #[derive(PartialEq)]
 pub enum LoadOtherSource {
-    A, A8, CAddress,
+    A,
+    A8,
+    CAddress,
 }
 
 pub enum StackTarget {
-    BC, DE, HL, AF,
+    BC,
+    DE,
+    HL,
+    AF,
 }
 
 pub enum LoadType {
@@ -360,10 +367,10 @@ impl Instructions {
             0xFD => Some(Instructions::SET(7, ArithmeticSource::L)),
             0xFE => Some(Instructions::SET(7, ArithmeticSource::HLAddr)),
             0xFF => Some(Instructions::SET(7, ArithmeticSource::A)),
+            _ => None,
         }
     }
-
-    #[rustfmt::skip]
+    
     pub fn from_byte_not_prefixed(byte: u8) -> Option<Instructions> {
         match byte {
             0x00 => Some(Instructions::NOP()),

@@ -6,7 +6,6 @@ pub struct APU {
 }
 
 impl APU {
-
     pub fn new() -> Self {
         APU {
             sound_data: [0; 0x30],

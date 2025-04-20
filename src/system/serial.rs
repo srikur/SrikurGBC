@@ -1,6 +1,6 @@
-use std::rc::Rc;
-use std::cell::RefCell;
 use super::interrupts::*;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 pub struct Serial {
     pub intref: Rc<RefCell<Interrupt>>,
@@ -22,7 +22,7 @@ impl Serial {
             0xFF01 => {
                 //self.intref.borrow_mut().set_interrupt(Interrupts::Serial);
                 self.data
-            },
+            }
             0xFF02 => self.control,
             _ => unreachable!(),
         }
@@ -33,7 +33,7 @@ impl Serial {
             0xFF01 => {
                 self.data = value;
                 //self.intref.borrow_mut().set_interrupt(Interrupts::Serial);
-            },
+            }
             0xFF02 => self.control = value,
             _ => unreachable!(),
         };
